@@ -123,7 +123,7 @@ requestRoutes.post('/', async (c) => {
   if (!user) return c.json({ error: '認証が必要です' }, 401)
 
   const body = await c.req.json()
-  const { type, title, client_name, amount, tax_rate, remarks } = body
+  const { type, title, client_name, amount_with_tax: inputAmountWithTax, tax_rate, remarks } = body
 
   // Validation
   if (!type || !['estimate', 'invoice'].includes(type)) {
@@ -135,8 +135,8 @@ requestRoutes.post('/', async (c) => {
   if (!client_name || client_name.length > 100) {
     return c.json({ error: '取引先名は1〜100文字で入力してください' }, 400)
   }
-  if (!amount || amount <= 0) {
-    return c.json({ error: '金額は1以上を入力してください' }, 400)
+  if (!inputAmountWithTax || inputAmountWithTax <= 0) {
+    return c.json({ error: '金額（税込）は1以上を入力してください' }, 400)
   }
   if (tax_rate === undefined || ![0.10, 0.08, 0.0].includes(tax_rate)) {
     return c.json({ error: '税率を選択してください' }, 400)
@@ -163,7 +163,9 @@ requestRoutes.post('/', async (c) => {
     return c.json({ error: 'すべての承認者が申請者本人のため申請できません' }, 400)
   }
 
-  const amount_with_tax = Math.round(amount * (1 + tax_rate))
+  // 税込金額から税抜金額を逆算
+  const amount_with_tax = Math.round(inputAmountWithTax)
+  const amount = tax_rate > 0 ? Math.round(amount_with_tax / (1 + tax_rate)) : amount_with_tax
 
   // Get next request number
   await c.env.DB.prepare(
@@ -254,16 +256,18 @@ requestRoutes.post('/:id/resubmit', async (c) => {
   }
 
   const body = await c.req.json()
-  const { type, title, client_name, amount, tax_rate, remarks } = body
+  const { type, title, client_name, amount_with_tax, tax_rate, remarks } = body
 
   // Validation (same as create)
   if (!type || !['estimate', 'invoice'].includes(type)) return c.json({ error: '申請種別を選択してください' }, 400)
   if (!title || title.length > 100) return c.json({ error: '件名は1〜100文字で入力してください' }, 400)
   if (!client_name || client_name.length > 100) return c.json({ error: '取引先名は1〜100文字で入力してください' }, 400)
-  if (!amount || amount <= 0) return c.json({ error: '金額は1以上を入力してください' }, 400)
+  if (!amount_with_tax || amount_with_tax <= 0) return c.json({ error: '金額（税込）は1以上を入力してください' }, 400)
   if (tax_rate === undefined || ![0.10, 0.08, 0.0].includes(tax_rate)) return c.json({ error: '税率を選択してください' }, 400)
 
-  const amount_with_tax = Math.round(amount * (1 + tax_rate))
+  // 税込金額から税抜金額を逆算
+  const computedAmountWithTax = Math.round(amount_with_tax)
+  const amount = tax_rate > 0 ? Math.round(computedAmountWithTax / (1 + tax_rate)) : computedAmountWithTax
   const newVersion = (request.version as number) + 1
 
   // Update request
@@ -271,7 +275,7 @@ requestRoutes.post('/:id/resubmit', async (c) => {
     `UPDATE requests SET type=?, title=?, client_name=?, amount=?, tax_rate=?, amount_with_tax=?, remarks=?,
      status='pending', current_step=1, version=?, updated_at=datetime('now')
      WHERE id = ?`
-  ).bind(type, title, client_name, amount, tax_rate, amount_with_tax, remarks || null, newVersion, id).run()
+  ).bind(type, title, client_name, amount, tax_rate, computedAmountWithTax, remarks || null, newVersion, id).run()
 
   // Create new approval steps with new version
   const approvers = await c.env.DB.prepare(

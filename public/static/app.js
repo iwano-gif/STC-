@@ -480,13 +480,47 @@ async function quickApprove(stepId, requestId) {
 }
 
 // ============================================================
-// NEW REQUEST FORM (with PDF Upload)
+// NEW REQUEST FORM (with PDF Upload & Auto-fill)
 // ============================================================
 function renderNewRequest(main) {
   main.innerHTML = `
     <h1 class="text-xl font-bold text-gray-900 mb-4">新規申請</h1>
     <div class="bg-white border border-gray-200 rounded-lg p-6 max-w-2xl">
       <form id="request-form" class="space-y-5">
+        
+        <!-- PDF Upload Section (FIRST - triggers auto-fill) -->
+        <div class="bg-blue-50 border border-blue-200 rounded-lg p-4">
+          <label class="block text-sm font-medium text-blue-800 mb-2">
+            <i class="fas fa-magic text-blue-600 mr-1"></i>
+            PDFをアップロードして自動入力 <span class="text-red-500">*</span>
+          </label>
+          <p class="text-xs text-blue-600 mb-3">見積書・請求書のPDFをアップロードすると、金額・取引先等が自動で入力されます</p>
+          
+          <div id="pdf-drop-zone" class="border-2 border-dashed border-blue-300 rounded-lg p-6 text-center hover:border-blue-500 bg-white transition-colors cursor-pointer">
+            <i class="fas fa-cloud-upload-alt text-blue-400 text-2xl mb-2"></i>
+            <p class="text-sm text-gray-600">ここにPDFをドラッグ＆ドロップ</p>
+            <p class="text-xs text-gray-400 mt-1">または</p>
+            <button type="button" id="pdf-select-btn" class="mt-2 px-4 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+              <i class="fas fa-file-pdf mr-1"></i>ファイルを選択
+            </button>
+            <input type="file" id="pdf-file-input" accept=".pdf,application/pdf" multiple class="hidden">
+          </div>
+          
+          <!-- PDF parse status -->
+          <div id="pdf-parse-status" class="mt-3 hidden">
+            <div class="flex items-center gap-2 text-sm text-blue-700">
+              <i class="fas fa-spinner fa-spin"></i>
+              <span>PDFを解析中...</span>
+            </div>
+          </div>
+          
+          <!-- Auto-fill result banner -->
+          <div id="pdf-autofill-result" class="mt-3 hidden"></div>
+          
+          <!-- Selected files list -->
+          <div id="pdf-file-list" class="mt-3 space-y-2"></div>
+        </div>
+
         <div>
           <label class="block text-sm font-medium text-gray-700 mb-1">申請種別 <span class="text-red-500">*</span></label>
           <select id="req-type" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
@@ -504,15 +538,15 @@ function renderNewRequest(main) {
         </div>
         <div class="grid grid-cols-2 gap-4">
           <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1">金額（税抜）<span class="text-red-500">*</span></label>
+            <label class="block text-sm font-medium text-gray-700 mb-1">金額（税込）<span class="text-red-500">*</span></label>
             <div class="relative">
               <span class="absolute left-3 top-2 text-gray-500 text-sm">\u00a5</span>
-              <input type="number" id="req-amount" required min="1" step="1" class="w-full pl-7 pr-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500" placeholder="0" oninput="calcTax()">
+              <input type="number" id="req-amount" required min="1" step="1" class="w-full pl-7 pr-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500" placeholder="0" oninput="calcTaxFromInc()">
             </div>
           </div>
           <div>
             <label class="block text-sm font-medium text-gray-700 mb-1">税率 <span class="text-red-500">*</span></label>
-            <select id="req-tax" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500" onchange="calcTax()">
+            <select id="req-tax" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500" onchange="calcTaxFromInc()">
               <option value="0.10">10%</option>
               <option value="0.08">8%（軽減税率）</option>
               <option value="0.0">0%（非課税）</option>
@@ -520,34 +554,24 @@ function renderNewRequest(main) {
           </div>
         </div>
         <div class="bg-gray-50 rounded-lg p-3">
-          <p class="text-sm text-gray-500">税込金額</p>
-          <p id="req-total" class="text-lg font-bold text-gray-900">\u00a50</p>
+          <div class="flex justify-between items-center">
+            <div>
+              <p class="text-xs text-gray-500">税抜金額</p>
+              <p id="req-excl-tax" class="text-sm text-gray-700">\u00a50</p>
+            </div>
+            <div>
+              <p class="text-xs text-gray-500">消費税</p>
+              <p id="req-tax-amount" class="text-sm text-gray-700">\u00a50</p>
+            </div>
+            <div>
+              <p class="text-xs text-gray-500">税込金額</p>
+              <p id="req-total" class="text-lg font-bold text-gray-900">\u00a50</p>
+            </div>
+          </div>
         </div>
         <div>
           <label class="block text-sm font-medium text-gray-700 mb-1">備考</label>
           <textarea id="req-remarks" rows="3" maxlength="1000" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500" placeholder="備考があれば入力してください"></textarea>
-        </div>
-        
-        <!-- PDF Upload Section -->
-        <div class="border-t border-gray-200 pt-4">
-          <label class="block text-sm font-medium text-gray-700 mb-2">
-            <i class="fas fa-file-pdf text-red-500 mr-1"></i>
-            見積書・請求書PDF <span class="text-red-500">*</span>
-          </label>
-          <p class="text-xs text-gray-500 mb-3">PDF形式のみ / 1ファイル最大10MB / 複数ファイル添付可</p>
-          
-          <div id="pdf-drop-zone" class="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-blue-400 transition-colors cursor-pointer">
-            <i class="fas fa-cloud-upload-alt text-gray-400 text-2xl mb-2"></i>
-            <p class="text-sm text-gray-600">ここにPDFをドラッグ＆ドロップ</p>
-            <p class="text-xs text-gray-400 mt-1">または</p>
-            <button type="button" id="pdf-select-btn" class="mt-2 px-4 py-1.5 text-sm bg-white border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-700">
-              ファイルを選択
-            </button>
-            <input type="file" id="pdf-file-input" accept=".pdf,application/pdf" multiple class="hidden">
-          </div>
-          
-          <!-- Selected files list -->
-          <div id="pdf-file-list" class="mt-3 space-y-2"></div>
         </div>
 
         <div id="req-error" class="text-red-600 text-sm hidden"></div>
@@ -562,8 +586,10 @@ function renderNewRequest(main) {
   
   // PDF upload state
   const pendingFiles = [];
+  _currentPendingFiles = pendingFiles;
+  _currentFileListId = 'pdf-file-list';
   
-  setupPdfDropZone('pdf-drop-zone', 'pdf-file-input', 'pdf-select-btn', 'pdf-file-list', pendingFiles);
+  setupPdfDropZoneWithAutofill('pdf-drop-zone', 'pdf-file-input', 'pdf-select-btn', 'pdf-file-list', pendingFiles, 'new');
   
   document.getElementById('request-form').onsubmit = async (e) => {
     e.preventDefault();
@@ -582,12 +608,12 @@ function renderNewRequest(main) {
     btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>送信中...';
     
     try {
-      // 1. Create the request
+      // 1. Create the request (send tax-inclusive amount)
       const body = {
         type: document.getElementById('req-type').value,
         title: document.getElementById('req-title').value,
         client_name: document.getElementById('req-client').value,
-        amount: parseFloat(document.getElementById('req-amount').value),
+        amount_with_tax: parseFloat(document.getElementById('req-amount').value),
         tax_rate: parseFloat(document.getElementById('req-tax').value),
         remarks: document.getElementById('req-remarks').value
       };
@@ -727,12 +753,179 @@ function removePendingFile(idx) {
 const _origSetupPdfDropZone = setupPdfDropZone;
 // Note: we use a wrapper approach below instead
 
-function calcTax() {
-  const amount = parseFloat(document.getElementById('req-amount')?.value || '0');
+// Tax calculation from tax-inclusive amount (reverse calculation)
+function calcTaxFromInc() {
+  const amountWithTax = parseFloat(document.getElementById('req-amount')?.value || '0');
   const rate = parseFloat(document.getElementById('req-tax')?.value || '0.10');
-  const total = Math.round(amount * (1 + rate));
-  const el = document.getElementById('req-total');
-  if (el) el.textContent = formatCurrency(total);
+  const amountExclTax = rate > 0 ? Math.round(amountWithTax / (1 + rate)) : amountWithTax;
+  const taxAmount = amountWithTax - amountExclTax;
+  const elTotal = document.getElementById('req-total');
+  const elExcl = document.getElementById('req-excl-tax');
+  const elTaxAmt = document.getElementById('req-tax-amount');
+  if (elTotal) elTotal.textContent = formatCurrency(amountWithTax);
+  if (elExcl) elExcl.textContent = formatCurrency(amountExclTax);
+  if (elTaxAmt) elTaxAmt.textContent = formatCurrency(taxAmount);
+}
+
+// PDF auto-fill: parse PDF and populate form fields
+async function parsePdfAndAutofill(file, mode) {
+  const statusEl = document.getElementById('pdf-parse-status');
+  const resultEl = document.getElementById('pdf-autofill-result');
+  if (statusEl) { statusEl.classList.remove('hidden'); }
+  if (resultEl) { resultEl.classList.add('hidden'); }
+  
+  try {
+    const formData = new FormData();
+    formData.append('file', file);
+    const res = await api('/files/parse-pdf', { method: 'POST', body: formData });
+    
+    if (statusEl) statusEl.classList.add('hidden');
+    
+    if (!res.success || !res.parsed_data) {
+      if (resultEl) {
+        resultEl.innerHTML = `
+          <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3 text-sm text-yellow-800">
+            <i class="fas fa-exclamation-triangle mr-1"></i>
+            PDFから情報を抽出できませんでした。手動で入力してください。
+          </div>`;
+        resultEl.classList.remove('hidden');
+      }
+      return;
+    }
+    
+    const data = res.parsed_data;
+    let filled = [];
+    
+    // Determine field prefix based on mode
+    const prefix = mode === 'edit' ? 'edit' : 'req';
+    
+    // Auto-fill type
+    if (data.type) {
+      const typeEl = document.getElementById(prefix === 'edit' ? 'edit-type' : 'req-type');
+      if (typeEl) { typeEl.value = data.type; filled.push('申請種別'); }
+    }
+    
+    // Auto-fill title
+    if (data.title) {
+      const titleEl = document.getElementById(prefix === 'edit' ? 'edit-title' : 'req-title');
+      if (titleEl && !titleEl.value) { titleEl.value = data.title; filled.push('件名'); }
+    }
+    
+    // Auto-fill client
+    if (data.client_name) {
+      const clientEl = document.getElementById(prefix === 'edit' ? 'edit-client' : 'req-client');
+      if (clientEl && !clientEl.value) { clientEl.value = data.client_name; filled.push('取引先'); }
+    }
+    
+    // Auto-fill tax rate
+    if (data.tax_rate !== undefined) {
+      const taxEl = document.getElementById(prefix === 'edit' ? 'edit-tax' : 'req-tax');
+      if (taxEl) { taxEl.value = String(data.tax_rate); filled.push('税率'); }
+    }
+    
+    // Auto-fill amount (tax inclusive)
+    if (data.amount_with_tax) {
+      const amountEl = document.getElementById(prefix === 'edit' ? 'edit-amount' : 'req-amount');
+      if (amountEl) { amountEl.value = String(data.amount_with_tax); filled.push('金額（税込）'); }
+    }
+    
+    // Recalculate tax display
+    if (mode === 'edit') {
+      calcTaxEditFromInc();
+    } else {
+      calcTaxFromInc();
+    }
+    
+    // Show result
+    if (resultEl) {
+      if (filled.length > 0) {
+        resultEl.innerHTML = `
+          <div class="bg-green-50 border border-green-200 rounded-lg p-3 text-sm text-green-800">
+            <i class="fas fa-check-circle mr-1"></i>
+            PDFから自動入力しました：<strong>${filled.join('、')}</strong>
+            ${data.raw_amounts && data.raw_amounts.length > 1 ? `
+              <details class="mt-2">
+                <summary class="cursor-pointer text-green-600 hover:text-green-800">検出された金額情報（${data.raw_amounts.length}件）</summary>
+                <ul class="mt-1 ml-4 space-y-1 text-xs">
+                  ${data.raw_amounts.map(a => `<li>\u00a5${Number(a.value).toLocaleString()} ← ${a.label}</li>`).join('')}
+                </ul>
+              </details>
+            ` : ''}
+            <p class="mt-1 text-xs text-green-600">※ 内容を確認の上、必要に応じて修正してください</p>
+          </div>`;
+      } else {
+        resultEl.innerHTML = `
+          <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3 text-sm text-yellow-800">
+            <i class="fas fa-exclamation-triangle mr-1"></i>
+            PDFから自動入力できる情報が見つかりませんでした。手動で入力してください。
+          </div>`;
+      }
+      resultEl.classList.remove('hidden');
+    }
+  } catch (err) {
+    if (statusEl) statusEl.classList.add('hidden');
+    if (resultEl) {
+      resultEl.innerHTML = `
+        <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3 text-sm text-yellow-800">
+          <i class="fas fa-exclamation-triangle mr-1"></i>
+          PDF解析に失敗しました。手動で入力してください。
+        </div>`;
+      resultEl.classList.remove('hidden');
+    }
+  }
+}
+
+// Setup PDF drop zone with auto-fill functionality
+function setupPdfDropZoneWithAutofill(dropZoneId, fileInputId, selectBtnId, fileListId, pendingFiles, mode) {
+  const dropZone = document.getElementById(dropZoneId);
+  const fileInput = document.getElementById(fileInputId);
+  const selectBtn = document.getElementById(selectBtnId);
+  if (!dropZone || !fileInput) return;
+  
+  selectBtn.onclick = (e) => { e.stopPropagation(); fileInput.click(); };
+  dropZone.onclick = (e) => { 
+    if (e.target === dropZone || e.target.closest('#' + dropZoneId) === dropZone) {
+      if (e.target.tagName !== 'BUTTON' && !e.target.closest('button')) fileInput.click(); 
+    }
+  };
+  
+  fileInput.onchange = () => {
+    addPdfFilesWithAutofill(fileInput.files, pendingFiles, fileListId, mode);
+    fileInput.value = '';
+  };
+  
+  dropZone.ondragover = (e) => { e.preventDefault(); dropZone.classList.add('border-blue-500', 'bg-blue-50'); };
+  dropZone.ondragleave = (e) => { e.preventDefault(); dropZone.classList.remove('border-blue-500', 'bg-blue-50'); };
+  dropZone.ondrop = (e) => {
+    e.preventDefault();
+    dropZone.classList.remove('border-blue-500', 'bg-blue-50');
+    addPdfFilesWithAutofill(e.dataTransfer.files, pendingFiles, fileListId, mode);
+  };
+}
+
+function addPdfFilesWithAutofill(fileList, pendingFiles, fileListId, mode) {
+  const MAX_SIZE = 10 * 1024 * 1024;
+  const MAX_FILES = 10;
+  let firstNewFile = null;
+  
+  for (const file of fileList) {
+    if (!file.name.toLowerCase().endsWith('.pdf')) { showToast(`${file.name}: PDFファイルのみアップロードできます`, 'error'); continue; }
+    if (file.type && file.type !== 'application/pdf') { showToast(`${file.name}: PDFファイルのみアップロードできます`, 'error'); continue; }
+    if (file.size > MAX_SIZE) { showToast(`${file.name}: 10MB以下にしてください`, 'error'); continue; }
+    if (pendingFiles.length >= MAX_FILES) { showToast('1つの申請につき最大10ファイルまで', 'error'); break; }
+    if (pendingFiles.some(f => f.name === file.name && f.size === file.size)) continue;
+    if (!firstNewFile && pendingFiles.length === 0) firstNewFile = file;
+    pendingFiles.push(file);
+  }
+  
+  _currentPendingFiles = pendingFiles;
+  _currentFileListId = fileListId;
+  renderPdfFileList(pendingFiles, fileListId);
+  
+  // Auto-fill from the first PDF file uploaded
+  if (firstNewFile) {
+    parsePdfAndAutofill(firstNewFile, mode);
+  }
 }
 
 // ============================================================
@@ -891,9 +1084,9 @@ async function renderRequestDetail(main) {
         <div><span class="text-gray-500">申請者</span><p class="font-medium">${req.applicant_name}</p></div>
         <div><span class="text-gray-500">件名</span><p class="font-medium">${req.title}</p></div>
         <div><span class="text-gray-500">取引先</span><p class="font-medium">${req.client_name}</p></div>
-        <div><span class="text-gray-500">金額（税抜）</span><p class="font-medium">${formatCurrency(req.amount)}</p></div>
-        <div><span class="text-gray-500">税率</span><p class="font-medium">${req.tax_rate * 100}%</p></div>
         <div><span class="text-gray-500">金額（税込）</span><p class="font-medium text-lg">${formatCurrency(req.amount_with_tax)}</p></div>
+        <div><span class="text-gray-500">税率</span><p class="font-medium">${req.tax_rate * 100}%</p></div>
+        <div><span class="text-gray-500">税抜金額</span><p class="font-medium">${formatCurrency(req.amount)}</p></div>
         <div><span class="text-gray-500">申請日</span><p class="font-medium">${formatDate(req.created_at)}</p></div>
         ${req.remarks ? `<div class="sm:col-span-2"><span class="text-gray-500">備考</span><p class="font-medium whitespace-pre-wrap">${req.remarks}</p></div>` : ''}
       </div>
@@ -1312,15 +1505,15 @@ async function renderEditRequest(main) {
         </div>
         <div class="grid grid-cols-2 gap-4">
           <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1">金額（税抜）<span class="text-red-500">*</span></label>
+            <label class="block text-sm font-medium text-gray-700 mb-1">金額（税込）<span class="text-red-500">*</span></label>
             <div class="relative">
               <span class="absolute left-3 top-2 text-gray-500 text-sm">\u00a5</span>
-              <input type="number" id="edit-amount" required min="1" value="${req.amount}" class="w-full pl-7 pr-3 py-2 border border-gray-300 rounded-lg text-sm" oninput="calcTaxEdit()">
+              <input type="number" id="edit-amount" required min="1" value="${req.amount_with_tax}" class="w-full pl-7 pr-3 py-2 border border-gray-300 rounded-lg text-sm" oninput="calcTaxEditFromInc()">
             </div>
           </div>
           <div>
             <label class="block text-sm font-medium text-gray-700 mb-1">税率 <span class="text-red-500">*</span></label>
-            <select id="edit-tax" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" onchange="calcTaxEdit()">
+            <select id="edit-tax" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" onchange="calcTaxEditFromInc()">
               <option value="0.10" ${req.tax_rate==0.10?'selected':''}>10%</option>
               <option value="0.08" ${req.tax_rate==0.08?'selected':''}>8%</option>
               <option value="0.0" ${req.tax_rate==0?'selected':''}>0%</option>
@@ -1328,8 +1521,20 @@ async function renderEditRequest(main) {
           </div>
         </div>
         <div class="bg-gray-50 rounded-lg p-3">
-          <p class="text-sm text-gray-500">税込金額</p>
-          <p id="edit-total" class="text-lg font-bold">${formatCurrency(req.amount_with_tax)}</p>
+          <div class="flex justify-between items-center">
+            <div>
+              <p class="text-xs text-gray-500">税抜金額</p>
+              <p id="edit-excl-tax" class="text-sm text-gray-700">${formatCurrency(req.amount)}</p>
+            </div>
+            <div>
+              <p class="text-xs text-gray-500">消費税</p>
+              <p id="edit-tax-amount" class="text-sm text-gray-700">${formatCurrency(req.amount_with_tax - req.amount)}</p>
+            </div>
+            <div>
+              <p class="text-xs text-gray-500">税込金額</p>
+              <p id="edit-total" class="text-lg font-bold">${formatCurrency(req.amount_with_tax)}</p>
+            </div>
+          </div>
         </div>
         <div>
           <label class="block text-sm font-medium text-gray-700 mb-1">備考</label>
@@ -1359,13 +1564,22 @@ async function renderEditRequest(main) {
             </div>
           ` : '<p class="text-xs text-gray-400 mb-3">添付ファイルはありません</p>'}
           
-          <label class="block text-sm font-medium text-gray-700 mb-2">新しいPDFを追加</label>
-          <div id="edit-pdf-drop-zone" class="border-2 border-dashed border-gray-300 rounded-lg p-4 text-center hover:border-blue-400 transition-colors cursor-pointer">
-            <i class="fas fa-cloud-upload-alt text-gray-400 text-xl mb-1"></i>
+          <label class="block text-sm font-medium text-gray-700 mb-2">
+            <i class="fas fa-magic text-blue-600 mr-1"></i>新しいPDFを追加（自動入力対応）
+          </label>
+          <div id="edit-pdf-drop-zone" class="border-2 border-dashed border-blue-300 rounded-lg p-4 text-center hover:border-blue-500 bg-blue-50 transition-colors cursor-pointer">
+            <i class="fas fa-cloud-upload-alt text-blue-400 text-xl mb-1"></i>
             <p class="text-sm text-gray-600">PDFをドラッグ＆ドロップまたはクリック</p>
-            <button type="button" id="edit-pdf-select-btn" class="mt-1 px-3 py-1 text-xs bg-white border border-gray-300 rounded hover:bg-gray-50">ファイルを選択</button>
+            <button type="button" id="edit-pdf-select-btn" class="mt-1 px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700">ファイルを選択</button>
             <input type="file" id="edit-pdf-file-input" accept=".pdf,application/pdf" multiple class="hidden">
           </div>
+          <div id="pdf-parse-status" class="mt-2 hidden">
+            <div class="flex items-center gap-2 text-sm text-blue-700">
+              <i class="fas fa-spinner fa-spin"></i>
+              <span>PDFを解析中...</span>
+            </div>
+          </div>
+          <div id="pdf-autofill-result" class="mt-2 hidden"></div>
           <div id="edit-pdf-file-list" class="mt-2 space-y-2"></div>
         </div>
 
@@ -1385,7 +1599,7 @@ async function renderEditRequest(main) {
   _currentPendingFiles = newPendingFiles;
   _currentFileListId = 'edit-pdf-file-list';
   
-  setupPdfDropZone('edit-pdf-drop-zone', 'edit-pdf-file-input', 'edit-pdf-select-btn', 'edit-pdf-file-list', newPendingFiles);
+  setupPdfDropZoneWithAutofill('edit-pdf-drop-zone', 'edit-pdf-file-input', 'edit-pdf-select-btn', 'edit-pdf-file-list', newPendingFiles, 'edit');
   
   // Mark file for deletion
   window.markFileForDeletion = function(btn, fileId, fileName) {
@@ -1428,7 +1642,7 @@ async function renderEditRequest(main) {
         type: document.getElementById('edit-type').value,
         title: document.getElementById('edit-title').value,
         client_name: document.getElementById('edit-client').value,
-        amount: parseFloat(document.getElementById('edit-amount').value),
+        amount_with_tax: parseFloat(document.getElementById('edit-amount').value),
         tax_rate: parseFloat(document.getElementById('edit-tax').value),
         remarks: document.getElementById('edit-remarks').value
       };
@@ -1464,10 +1678,17 @@ async function renderEditRequest(main) {
   };
 }
 
-function calcTaxEdit() {
-  const amount = parseFloat(document.getElementById('edit-amount')?.value || '0');
+function calcTaxEditFromInc() {
+  const amountWithTax = parseFloat(document.getElementById('edit-amount')?.value || '0');
   const rate = parseFloat(document.getElementById('edit-tax')?.value || '0.10');
-  document.getElementById('edit-total').textContent = formatCurrency(Math.round(amount * (1 + rate)));
+  const amountExclTax = rate > 0 ? Math.round(amountWithTax / (1 + rate)) : amountWithTax;
+  const taxAmount = amountWithTax - amountExclTax;
+  const el = document.getElementById('edit-total');
+  const elExcl = document.getElementById('edit-excl-tax');
+  const elTaxAmt = document.getElementById('edit-tax-amount');
+  if (el) el.textContent = formatCurrency(amountWithTax);
+  if (elExcl) elExcl.textContent = formatCurrency(amountExclTax);
+  if (elTaxAmt) elTaxAmt.textContent = formatCurrency(taxAmount);
 }
 
 // ============================================================
