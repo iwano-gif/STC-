@@ -212,12 +212,6 @@ function renderLogin(app) {
             ログイン
           </button>
         </form>
-        <div class="mt-6 p-3 bg-gray-50 rounded-lg text-xs text-gray-500">
-          <p class="font-medium mb-1">デモアカウント（パスワード: password123）</p>
-          <p>管理者: iwano</p>
-          <p>承認者①（経理）: shinchi.m</p>
-          <p>承認者②（代表）: shinchi.t</p>
-        </div>
       </div>
     </div>`;
   
