@@ -8,9 +8,9 @@ INSERT OR IGNORE INTO profiles (id, email, display_name, password_hash, role, is
 INSERT OR IGNORE INTO profiles (id, email, display_name, password_hash, role, is_active) VALUES
   ('approver-001', 'shinchi.michiko', '新地 美智子', 'b8bc6112f9602be2d838d79a3b9c32cbe6106b773818eaf843f4f77b08ab583e', '["applicant","approver"]', 1);
 
--- 承認者②（新地 紀博 ─ 代表）
+-- 承認者②（新地 徳博 ─ 代表）
 INSERT OR IGNORE INTO profiles (id, email, display_name, password_hash, role, is_active) VALUES
-  ('approver-002', 'shinchi.norihiro', '新地 紀博', '8b43c2dd350eb0602bdc6a79bf7e84c6a14aa5e6a73c8156b67ad153374fae61', '["applicant","approver"]', 1);
+  ('approver-002', 'shinchi.norihiro', '新地 徳博', '8b43c2dd350eb0602bdc6a79bf7e84c6a14aa5e6a73c8156b67ad153374fae61', '["applicant","approver"]', 1);
 
 -- 承認者マスタ（2段階承認：経理→代表）
 INSERT OR IGNORE INTO approver_master (id, user_id, step_order, label, is_active) VALUES
