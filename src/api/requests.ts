@@ -105,9 +105,9 @@ requestRoutes.get('/:id', async (c) => {
      ORDER BY s.step_order ASC`
   ).bind(id, request.version).all()
 
-  // Get files
+  // Get files (metadata only, exclude file_data for performance)
   const files = await c.env.DB.prepare(
-    'SELECT * FROM request_files WHERE request_id = ? ORDER BY uploaded_at ASC'
+    'SELECT id, request_id, file_name, file_path, file_size, mime_type, uploaded_at FROM request_files WHERE request_id = ? ORDER BY uploaded_at ASC'
   ).bind(id).all()
 
   return c.json({

@@ -1,5 +1,6 @@
 // ============================================================
 // 申請承認ワークフロー - フロントエンドアプリケーション
+// PDF見積もり・請求書アップロード対応版
 // ============================================================
 
 // State Management
@@ -12,8 +13,13 @@ const state = {
 
 // API Helper
 async function api(path, options = {}) {
-  const headers = { 'Content-Type': 'application/json' };
+  const headers = {};
   if (state.token) headers['Authorization'] = `Bearer ${state.token}`;
+  
+  // Don't set Content-Type for FormData (browser sets it with boundary)
+  if (!(options.body instanceof FormData)) {
+    headers['Content-Type'] = 'application/json';
+  }
   
   try {
     const res = await fetch(`/api${path}`, { ...options, headers: { ...headers, ...options.headers } });
@@ -118,7 +124,7 @@ window.onpopstate = (e) => {
 };
 
 // Format helpers
-function formatCurrency(n) { return '¥' + Number(n).toLocaleString(); }
+function formatCurrency(n) { return '\u00a5' + Number(n).toLocaleString(); }
 function formatDate(d) { 
   if (!d) return '-';
   const dt = new Date(d + 'Z');
@@ -131,11 +137,17 @@ function statusBadge(s) {
   return `<span class="badge ${cls}">${label}</span>`;
 }
 function stepStatusIcon(s) {
-  if (s === 'approved') return '<span class="text-green-600 font-bold">✅</span>';
-  if (s === 'rejected') return '<span class="text-red-600 font-bold">❌</span>';
-  if (s === 'skipped') return '<span class="text-gray-400">⏭️</span>';
-  if (s === 'waiting') return '<span class="text-blue-600">⏳</span>';
-  return '<span class="text-gray-400">○</span>';
+  if (s === 'approved') return '<span class="text-green-600 font-bold">&#x2705;</span>';
+  if (s === 'rejected') return '<span class="text-red-600 font-bold">&#x274C;</span>';
+  if (s === 'skipped') return '<span class="text-gray-400">&#x23ED;&#xFE0F;</span>';
+  if (s === 'waiting') return '<span class="text-blue-600">&#x23F3;</span>';
+  return '<span class="text-gray-400">&#x25CB;</span>';
+}
+
+function formatFileSize(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
 }
 
 // ============================================================
@@ -196,11 +208,11 @@ function renderLogin(app) {
           </button>
         </form>
         <div class="mt-6 p-3 bg-gray-50 rounded-lg text-xs text-gray-500">
-          <p class="font-medium mb-1">デモアカウント：</p>
+          <p class="font-medium mb-1">デモアカウント（パスワード: password123）</p>
           <p>管理者: admin@example.com</p>
-          <p>申請者: sato@example.com</p>
-          <p>承認者: suzuki@example.com</p>
-          <p>パスワード: (シードデータのハッシュ)</p>
+          <p>承認者: suzuki@example.com / takahashi@example.com</p>
+          <p>事務員: yamamoto@example.com</p>
+          <p>申請者: sato@example.com / tanaka@example.com</p>
         </div>
       </div>
     </div>`;
@@ -223,8 +235,6 @@ function renderLogin(app) {
 // ============================================================
 function renderApp(app) {
   const isAdmin = hasRole('admin');
-  const isApprover = hasRole('approver');
-  const isClerk = hasRole('clerk');
   const userName = state.user?.displayName || state.user?.email;
   
   app.innerHTML = `
@@ -307,7 +317,6 @@ function renderApp(app) {
     sb.classList.toggle('mt-14');
   };
   
-  // Render page content
   renderPageContent();
 }
 
@@ -471,13 +480,13 @@ async function quickApprove(stepId, requestId) {
 }
 
 // ============================================================
-// NEW REQUEST FORM
+// NEW REQUEST FORM (with PDF Upload)
 // ============================================================
 function renderNewRequest(main) {
   main.innerHTML = `
     <h1 class="text-xl font-bold text-gray-900 mb-4">新規申請</h1>
-    <div class="bg-white border border-gray-200 rounded-lg p-6 max-w-xl">
-      <form id="request-form" class="space-y-4">
+    <div class="bg-white border border-gray-200 rounded-lg p-6 max-w-2xl">
+      <form id="request-form" class="space-y-5">
         <div>
           <label class="block text-sm font-medium text-gray-700 mb-1">申請種別 <span class="text-red-500">*</span></label>
           <select id="req-type" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
@@ -497,7 +506,7 @@ function renderNewRequest(main) {
           <div>
             <label class="block text-sm font-medium text-gray-700 mb-1">金額（税抜）<span class="text-red-500">*</span></label>
             <div class="relative">
-              <span class="absolute left-3 top-2 text-gray-500 text-sm">¥</span>
+              <span class="absolute left-3 top-2 text-gray-500 text-sm">\u00a5</span>
               <input type="number" id="req-amount" required min="1" step="1" class="w-full pl-7 pr-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500" placeholder="0" oninput="calcTax()">
             </div>
           </div>
@@ -512,12 +521,35 @@ function renderNewRequest(main) {
         </div>
         <div class="bg-gray-50 rounded-lg p-3">
           <p class="text-sm text-gray-500">税込金額</p>
-          <p id="req-total" class="text-lg font-bold text-gray-900">¥0</p>
+          <p id="req-total" class="text-lg font-bold text-gray-900">\u00a50</p>
         </div>
         <div>
           <label class="block text-sm font-medium text-gray-700 mb-1">備考</label>
           <textarea id="req-remarks" rows="3" maxlength="1000" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500" placeholder="備考があれば入力してください"></textarea>
         </div>
+        
+        <!-- PDF Upload Section -->
+        <div class="border-t border-gray-200 pt-4">
+          <label class="block text-sm font-medium text-gray-700 mb-2">
+            <i class="fas fa-file-pdf text-red-500 mr-1"></i>
+            見積書・請求書PDF <span class="text-red-500">*</span>
+          </label>
+          <p class="text-xs text-gray-500 mb-3">PDF形式のみ / 1ファイル最大10MB / 複数ファイル添付可</p>
+          
+          <div id="pdf-drop-zone" class="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-blue-400 transition-colors cursor-pointer">
+            <i class="fas fa-cloud-upload-alt text-gray-400 text-2xl mb-2"></i>
+            <p class="text-sm text-gray-600">ここにPDFをドラッグ＆ドロップ</p>
+            <p class="text-xs text-gray-400 mt-1">または</p>
+            <button type="button" id="pdf-select-btn" class="mt-2 px-4 py-1.5 text-sm bg-white border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-700">
+              ファイルを選択
+            </button>
+            <input type="file" id="pdf-file-input" accept=".pdf,application/pdf" multiple class="hidden">
+          </div>
+          
+          <!-- Selected files list -->
+          <div id="pdf-file-list" class="mt-3 space-y-2"></div>
+        </div>
+
         <div id="req-error" class="text-red-600 text-sm hidden"></div>
         <div class="flex justify-end gap-3 pt-2">
           <button type="button" onclick="navigate('dashboard')" class="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">キャンセル</button>
@@ -528,15 +560,29 @@ function renderNewRequest(main) {
       </form>
     </div>`;
   
+  // PDF upload state
+  const pendingFiles = [];
+  
+  setupPdfDropZone('pdf-drop-zone', 'pdf-file-input', 'pdf-select-btn', 'pdf-file-list', pendingFiles);
+  
   document.getElementById('request-form').onsubmit = async (e) => {
     e.preventDefault();
     const errEl = document.getElementById('req-error');
     errEl.classList.add('hidden');
+    
+    // Validate at least one PDF is selected
+    if (pendingFiles.length === 0) {
+      errEl.textContent = '見積書・請求書のPDFファイルを1つ以上添付してください';
+      errEl.classList.remove('hidden');
+      return;
+    }
+    
     const btn = document.getElementById('req-submit');
     btn.disabled = true;
-    btn.textContent = '送信中...';
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>送信中...';
     
     try {
+      // 1. Create the request
       const body = {
         type: document.getElementById('req-type').value,
         title: document.getElementById('req-title').value,
@@ -546,7 +592,23 @@ function renderNewRequest(main) {
         remarks: document.getElementById('req-remarks').value
       };
       const res = await api('/requests', { method: 'POST', body: JSON.stringify(body) });
-      showToast('申請が完了しました');
+      
+      // 2. Upload PDF files
+      let uploadErrors = [];
+      for (const file of pendingFiles) {
+        try {
+          await uploadPdfFile(res.id, file);
+        } catch (uploadErr) {
+          uploadErrors.push(`${file.name}: ${uploadErr.message}`);
+        }
+      }
+      
+      if (uploadErrors.length > 0) {
+        showToast(`申請は作成されましたが、一部のファイルのアップロードに失敗しました: ${uploadErrors.join(', ')}`, 'error');
+      } else {
+        showToast('申請とPDFファイルのアップロードが完了しました');
+      }
+      
       navigate('request-detail', { id: res.id });
     } catch (err) {
       errEl.textContent = err.message;
@@ -556,6 +618,114 @@ function renderNewRequest(main) {
     }
   };
 }
+
+// PDF file upload helper
+async function uploadPdfFile(requestId, file) {
+  const formData = new FormData();
+  formData.append('request_id', requestId);
+  formData.append('file', file);
+  
+  return await api('/files/upload', { method: 'POST', body: formData });
+}
+
+// Setup drag & drop zone for PDF
+function setupPdfDropZone(dropZoneId, fileInputId, selectBtnId, fileListId, pendingFiles) {
+  const dropZone = document.getElementById(dropZoneId);
+  const fileInput = document.getElementById(fileInputId);
+  const selectBtn = document.getElementById(selectBtnId);
+  
+  if (!dropZone || !fileInput) return;
+  
+  // Click to select
+  selectBtn.onclick = () => fileInput.click();
+  dropZone.onclick = (e) => { if (e.target === dropZone || e.target.tagName === 'I' || e.target.tagName === 'P') fileInput.click(); };
+  
+  // File input change
+  fileInput.onchange = () => {
+    addPdfFiles(fileInput.files, pendingFiles, fileListId);
+    fileInput.value = '';
+  };
+  
+  // Drag & Drop
+  dropZone.ondragover = (e) => { e.preventDefault(); dropZone.classList.add('border-blue-400', 'bg-blue-50'); };
+  dropZone.ondragleave = (e) => { e.preventDefault(); dropZone.classList.remove('border-blue-400', 'bg-blue-50'); };
+  dropZone.ondrop = (e) => {
+    e.preventDefault();
+    dropZone.classList.remove('border-blue-400', 'bg-blue-50');
+    addPdfFiles(e.dataTransfer.files, pendingFiles, fileListId);
+  };
+}
+
+function addPdfFiles(fileList, pendingFiles, fileListId) {
+  const MAX_SIZE = 10 * 1024 * 1024;
+  const MAX_FILES = 10;
+  
+  for (const file of fileList) {
+    // Validate
+    if (!file.name.toLowerCase().endsWith('.pdf')) {
+      showToast(`${file.name}: PDFファイルのみアップロードできます`, 'error');
+      continue;
+    }
+    if (file.type && file.type !== 'application/pdf') {
+      showToast(`${file.name}: PDFファイルのみアップロードできます`, 'error');
+      continue;
+    }
+    if (file.size > MAX_SIZE) {
+      showToast(`${file.name}: ファイルサイズは10MB以下にしてください`, 'error');
+      continue;
+    }
+    if (pendingFiles.length >= MAX_FILES) {
+      showToast('1つの申請につき最大10ファイルまでです', 'error');
+      break;
+    }
+    // Check duplicate
+    if (pendingFiles.some(f => f.name === file.name && f.size === file.size)) {
+      showToast(`${file.name}: 同名のファイルは既に追加されています`, 'error');
+      continue;
+    }
+    pendingFiles.push(file);
+  }
+  
+  renderPdfFileList(pendingFiles, fileListId);
+}
+
+function renderPdfFileList(pendingFiles, fileListId) {
+  const listEl = document.getElementById(fileListId);
+  if (!listEl) return;
+  
+  if (pendingFiles.length === 0) {
+    listEl.innerHTML = '';
+    return;
+  }
+  
+  listEl.innerHTML = pendingFiles.map((file, idx) => `
+    <div class="flex items-center gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
+      <i class="fas fa-file-pdf text-red-500 text-lg"></i>
+      <div class="flex-1 min-w-0">
+        <p class="text-sm font-medium text-gray-900 truncate">${file.name}</p>
+        <p class="text-xs text-gray-500">${formatFileSize(file.size)}</p>
+      </div>
+      <button type="button" onclick="removePendingFile(${idx})" class="text-gray-400 hover:text-red-500 p-1">
+        <i class="fas fa-times"></i>
+      </button>
+    </div>
+  `).join('');
+}
+
+// Global reference for pending files (for remove button)
+let _currentPendingFiles = null;
+let _currentFileListId = null;
+
+function removePendingFile(idx) {
+  if (_currentPendingFiles) {
+    _currentPendingFiles.splice(idx, 1);
+    renderPdfFileList(_currentPendingFiles, _currentFileListId);
+  }
+}
+
+// Override setupPdfDropZone to store reference
+const _origSetupPdfDropZone = setupPdfDropZone;
+// Note: we use a wrapper approach below instead
 
 function calcTax() {
   const amount = parseFloat(document.getElementById('req-amount')?.value || '0');
@@ -686,7 +856,7 @@ async function exportCSV() {
 }
 
 // ============================================================
-// REQUEST DETAIL
+// REQUEST DETAIL (with PDF files display)
 // ============================================================
 async function renderRequestDetail(main) {
   const id = state.pageParams?.id;
@@ -700,6 +870,10 @@ async function renderRequestDetail(main) {
   
   // Find current user's pending step
   const myStep = steps.find(s => s.approver_id === state.user?.id && s.status === 'waiting' && s.step_order == req.current_step);
+
+  // Can upload: applicant on pending/rejected request
+  const canUpload = isApplicant && (req.status === 'pending' || req.status === 'rejected');
+  const canDelete = isApplicant && (req.status === 'pending' || req.status === 'rejected');
   
   main.innerHTML = `
     <div class="flex items-center gap-3 mb-4">
@@ -725,6 +899,54 @@ async function renderRequestDetail(main) {
       </div>
     </div>
     
+    <!-- Attached PDF Files -->
+    <div class="bg-white border border-gray-200 rounded-lg p-5 mb-4">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="text-sm font-semibold text-gray-500 uppercase tracking-wider">
+          <i class="fas fa-file-pdf text-red-500 mr-1"></i>添付PDF（${files.length}件）
+        </h2>
+        ${canUpload ? `
+          <button onclick="showUploadModal('${req.id}')" class="text-sm text-blue-600 hover:text-blue-800">
+            <i class="fas fa-plus mr-1"></i>ファイルを追加
+          </button>
+        ` : ''}
+      </div>
+      ${files.length === 0 ? `
+        <div class="text-center py-6 text-gray-400">
+          <i class="fas fa-file-pdf text-3xl mb-2"></i>
+          <p class="text-sm">添付ファイルはありません</p>
+        </div>
+      ` : `
+        <div class="space-y-2">
+          ${files.map(f => `
+            <div class="flex items-center gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200 hover:bg-gray-100 transition-colors">
+              <i class="fas fa-file-pdf text-red-500 text-lg flex-shrink-0"></i>
+              <div class="flex-1 min-w-0">
+                <p class="text-sm font-medium text-gray-900 truncate">${f.file_name}</p>
+                <p class="text-xs text-gray-500">${formatFileSize(f.file_size)} ・ ${formatDate(f.uploaded_at)}</p>
+              </div>
+              <div class="flex gap-2 flex-shrink-0">
+                <button onclick="previewPdf('${f.id}', '${f.file_name.replace(/'/g, "\\'")}')" 
+                  class="px-2.5 py-1 text-xs bg-white border border-gray-300 rounded hover:bg-gray-50 text-gray-700" title="プレビュー">
+                  <i class="fas fa-eye"></i>
+                </button>
+                <button onclick="downloadPdf('${f.id}', '${f.file_name.replace(/'/g, "\\'")}')" 
+                  class="px-2.5 py-1 text-xs bg-white border border-gray-300 rounded hover:bg-gray-50 text-gray-700" title="ダウンロード">
+                  <i class="fas fa-download"></i>
+                </button>
+                ${canDelete ? `
+                  <button onclick="deletePdfFile('${f.id}', '${f.file_name.replace(/'/g, "\\'")}')" 
+                    class="px-2.5 py-1 text-xs bg-white border border-red-300 rounded hover:bg-red-50 text-red-600" title="削除">
+                    <i class="fas fa-trash"></i>
+                  </button>
+                ` : ''}
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      `}
+    </div>
+    
     <!-- Approval Timeline -->
     <div class="bg-white border border-gray-200 rounded-lg p-5 mb-4">
       <h2 class="text-sm font-semibold text-gray-500 mb-4 uppercase tracking-wider">承認進捗</h2>
@@ -740,7 +962,7 @@ async function renderRequestDetail(main) {
               <div class="flex-1 pb-1">
                 <div class="flex items-center gap-2">
                   <span class="font-medium text-sm">STEP ${s.step_order} ${s.approver_label}（${s.approver_name}）</span>
-                  ${isCurrent ? '<span class="text-xs text-blue-600 font-medium">← 現在</span>' : ''}
+                  ${isCurrent ? '<span class="text-xs text-blue-600 font-medium">&#x2190; 現在</span>' : ''}
                 </div>
                 <p class="text-xs text-gray-500 mt-0.5">
                   ${s.status === 'approved' ? `承認済み　${formatDate(s.decided_at)}` : 
@@ -758,6 +980,7 @@ async function renderRequestDetail(main) {
     ${myStep ? `
     <div class="bg-white border border-blue-200 rounded-lg p-5 mb-4">
       <h2 class="text-sm font-semibold text-blue-600 mb-3">承認操作</h2>
+      <p class="text-xs text-gray-500 mb-3">添付PDFを確認の上、承認または差戻しを行ってください。</p>
       <div class="mb-3">
         <label class="block text-sm font-medium text-gray-700 mb-1">コメント（差戻し時は必須）</label>
         <textarea id="approval-comment" rows="2" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500" placeholder="コメントを入力..."></textarea>
@@ -804,6 +1027,181 @@ async function renderRequestDetail(main) {
     </div>` : ''}`;
 }
 
+// PDF Preview in modal
+function previewPdf(fileId, fileName) {
+  const previewUrl = `/api/files/${fileId}/preview?token=${encodeURIComponent(state.token)}`;
+  
+  const container = document.getElementById('modal-container');
+  container.innerHTML = `
+    <div class="modal-overlay fixed inset-0 z-40 flex items-center justify-center p-4" onclick="if(event.target===this)closeModal()">
+      <div class="bg-white rounded-lg shadow-xl w-full max-w-4xl" style="height:85vh;">
+        <div class="px-6 py-3 border-b border-gray-200 flex justify-between items-center">
+          <h3 class="text-sm font-semibold text-gray-900 flex items-center gap-2">
+            <i class="fas fa-file-pdf text-red-500"></i> ${fileName}
+          </h3>
+          <div class="flex items-center gap-2">
+            <button onclick="downloadPdf('${fileId}', '${fileName.replace(/'/g, "\\'")}')" class="text-sm text-blue-600 hover:text-blue-800">
+              <i class="fas fa-download mr-1"></i>ダウンロード
+            </button>
+            <button onclick="closeModal()" class="text-gray-400 hover:text-gray-600 ml-2"><i class="fas fa-times text-lg"></i></button>
+          </div>
+        </div>
+        <div class="p-0" style="height:calc(85vh - 52px);">
+          <iframe src="${previewUrl}" class="w-full h-full border-0 rounded-b-lg" title="PDF Preview"></iframe>
+        </div>
+      </div>
+    </div>`;
+}
+
+// PDF Download
+async function downloadPdf(fileId, fileName) {
+  try {
+    const response = await fetch(`/api/files/${fileId}/download`, {
+      headers: { 'Authorization': `Bearer ${state.token}` }
+    });
+    if (!response.ok) {
+      const err = await response.json();
+      throw new Error(err.error || 'ダウンロードに失敗しました');
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+// Delete PDF file
+async function deletePdfFile(fileId, fileName) {
+  showConfirm(`「${fileName}」を削除しますか？`, async () => {
+    try {
+      await api(`/files/${fileId}/delete`, { method: 'POST' });
+      showToast('ファイルを削除しました');
+      renderPageContent();
+    } catch (err) { showToast(err.message, 'error'); }
+  });
+}
+
+// Upload modal (from detail page)
+function showUploadModal(requestId) {
+  const container = document.getElementById('modal-container');
+  container.innerHTML = `
+    <div class="modal-overlay fixed inset-0 z-40 flex items-center justify-center p-4" onclick="if(event.target===this)closeModal()">
+      <div class="bg-white rounded-lg shadow-xl w-full max-w-lg">
+        <div class="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
+          <h3 class="text-lg font-semibold">PDFファイルを追加</h3>
+          <button onclick="closeModal()" class="text-gray-400 hover:text-gray-600"><i class="fas fa-times"></i></button>
+        </div>
+        <div class="px-6 py-4">
+          <p class="text-xs text-gray-500 mb-3">PDF形式のみ / 1ファイル最大10MB</p>
+          <div id="modal-drop-zone" class="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-blue-400 transition-colors cursor-pointer">
+            <i class="fas fa-cloud-upload-alt text-gray-400 text-2xl mb-2"></i>
+            <p class="text-sm text-gray-600">ここにPDFをドラッグ＆ドロップ</p>
+            <p class="text-xs text-gray-400 mt-1">または</p>
+            <button type="button" id="modal-select-btn" class="mt-2 px-4 py-1.5 text-sm bg-white border border-gray-300 rounded-lg hover:bg-gray-50">ファイルを選択</button>
+            <input type="file" id="modal-file-input" accept=".pdf,application/pdf" multiple class="hidden">
+          </div>
+          <div id="modal-file-list" class="mt-3 space-y-2"></div>
+          <div id="modal-upload-progress" class="mt-3 hidden">
+            <div class="flex items-center gap-2">
+              <i class="fas fa-spinner fa-spin text-blue-600"></i>
+              <span class="text-sm text-gray-600">アップロード中...</span>
+            </div>
+          </div>
+        </div>
+        <div class="px-6 py-4 border-t border-gray-200 flex justify-end gap-3">
+          <button onclick="closeModal()" class="px-4 py-2 text-sm border border-gray-300 rounded-lg">キャンセル</button>
+          <button id="modal-upload-btn" class="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700" disabled>
+            <i class="fas fa-upload mr-1"></i>アップロード
+          </button>
+        </div>
+      </div>
+    </div>`;
+  
+  const modalPendingFiles = [];
+  
+  // Setup drop zone
+  const dropZone = document.getElementById('modal-drop-zone');
+  const fileInput = document.getElementById('modal-file-input');
+  const selectBtn = document.getElementById('modal-select-btn');
+  const uploadBtn = document.getElementById('modal-upload-btn');
+  
+  selectBtn.onclick = () => fileInput.click();
+  dropZone.onclick = (e) => { if (e.target === dropZone || e.target.tagName === 'I' || e.target.tagName === 'P') fileInput.click(); };
+  
+  fileInput.onchange = () => {
+    addModalFiles(fileInput.files, modalPendingFiles);
+    fileInput.value = '';
+  };
+  
+  dropZone.ondragover = (e) => { e.preventDefault(); dropZone.classList.add('border-blue-400', 'bg-blue-50'); };
+  dropZone.ondragleave = (e) => { e.preventDefault(); dropZone.classList.remove('border-blue-400', 'bg-blue-50'); };
+  dropZone.ondrop = (e) => {
+    e.preventDefault();
+    dropZone.classList.remove('border-blue-400', 'bg-blue-50');
+    addModalFiles(e.dataTransfer.files, modalPendingFiles);
+  };
+  
+  function addModalFiles(fileList, pending) {
+    const MAX_SIZE = 10 * 1024 * 1024;
+    for (const file of fileList) {
+      if (!file.name.toLowerCase().endsWith('.pdf')) { showToast(`${file.name}: PDFのみ`, 'error'); continue; }
+      if (file.size > MAX_SIZE) { showToast(`${file.name}: 10MB超過`, 'error'); continue; }
+      if (pending.some(f => f.name === file.name && f.size === file.size)) continue;
+      pending.push(file);
+    }
+    renderModalFileList(pending);
+    uploadBtn.disabled = pending.length === 0;
+  }
+  
+  function renderModalFileList(pending) {
+    const listEl = document.getElementById('modal-file-list');
+    listEl.innerHTML = pending.map((f, i) => `
+      <div class="flex items-center gap-3 p-2 bg-gray-50 rounded border border-gray-200">
+        <i class="fas fa-file-pdf text-red-500"></i>
+        <div class="flex-1 min-w-0">
+          <p class="text-sm truncate">${f.name}</p>
+          <p class="text-xs text-gray-500">${formatFileSize(f.size)}</p>
+        </div>
+        <button type="button" onclick="this.closest('.flex').remove(); window._modalPending.splice(${i},1); document.getElementById('modal-upload-btn').disabled = window._modalPending.length === 0;" class="text-gray-400 hover:text-red-500">
+          <i class="fas fa-times"></i>
+        </button>
+      </div>
+    `).join('');
+  }
+  
+  // Store reference for inline remove buttons
+  window._modalPending = modalPendingFiles;
+  
+  uploadBtn.onclick = async () => {
+    uploadBtn.disabled = true;
+    document.getElementById('modal-upload-progress').classList.remove('hidden');
+    
+    let errors = [];
+    for (const file of modalPendingFiles) {
+      try {
+        await uploadPdfFile(requestId, file);
+      } catch (err) {
+        errors.push(`${file.name}: ${err.message}`);
+      }
+    }
+    
+    closeModal();
+    if (errors.length > 0) {
+      showToast('一部のファイルのアップロードに失敗しました', 'error');
+    } else {
+      showToast('ファイルをアップロードしました');
+    }
+    renderPageContent();
+  };
+}
+
 async function doApprove(stepId) {
   const comment = document.getElementById('approval-comment')?.value || '';
   try {
@@ -826,7 +1224,7 @@ async function doReject(stepId) {
 }
 
 async function doWithdraw(requestId) {
-  showConfirm('この申請を取り下げますか？取下げ後は再申請できません。', async () => {
+  showConfirm('この申請を取り下げますか？', async () => {
     try {
       await api(`/requests/${requestId}/withdraw`, { method: 'POST' });
       showToast('申請を取り下げました');
@@ -870,7 +1268,7 @@ async function showReassignModal(requestId, currentStep, version) {
 }
 
 // ============================================================
-// EDIT / RESUBMIT REQUEST
+// EDIT / RESUBMIT REQUEST (with PDF file management)
 // ============================================================
 async function renderEditRequest(main) {
   const id = state.pageParams?.id;
@@ -878,6 +1276,7 @@ async function renderEditRequest(main) {
   
   const data = await api(`/requests/${id}`);
   const req = data.request;
+  const existingFiles = data.files || [];
   
   // Find rejection comment
   const rejectedStep = data.steps.find(s => s.status === 'rejected');
@@ -885,7 +1284,7 @@ async function renderEditRequest(main) {
   main.innerHTML = `
     <div class="flex items-center gap-3 mb-4">
       <button onclick="navigate('request-detail',{id:'${id}'})" class="text-gray-500 hover:text-gray-700"><i class="fas fa-arrow-left"></i></button>
-      <h1 class="text-xl font-bold text-gray-900">申請 #${String(req.request_number).padStart(4,'0')}（修正）</h1>
+      <h1 class="text-xl font-bold text-gray-900">申請 #${String(req.request_number).padStart(4,'0')}（修正・再申請）</h1>
     </div>
     
     ${rejectedStep ? `
@@ -894,8 +1293,8 @@ async function renderEditRequest(main) {
       <p class="text-sm text-red-700">${rejectedStep.comment}</p>
     </div>` : ''}
     
-    <div class="bg-white border border-gray-200 rounded-lg p-6 max-w-xl">
-      <form id="edit-form" class="space-y-4">
+    <div class="bg-white border border-gray-200 rounded-lg p-6 max-w-2xl">
+      <form id="edit-form" class="space-y-5">
         <div>
           <label class="block text-sm font-medium text-gray-700 mb-1">申請種別 <span class="text-red-500">*</span></label>
           <select id="edit-type" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
@@ -915,7 +1314,7 @@ async function renderEditRequest(main) {
           <div>
             <label class="block text-sm font-medium text-gray-700 mb-1">金額（税抜）<span class="text-red-500">*</span></label>
             <div class="relative">
-              <span class="absolute left-3 top-2 text-gray-500 text-sm">¥</span>
+              <span class="absolute left-3 top-2 text-gray-500 text-sm">\u00a5</span>
               <input type="number" id="edit-amount" required min="1" value="${req.amount}" class="w-full pl-7 pr-3 py-2 border border-gray-300 rounded-lg text-sm" oninput="calcTaxEdit()">
             </div>
           </div>
@@ -936,6 +1335,40 @@ async function renderEditRequest(main) {
           <label class="block text-sm font-medium text-gray-700 mb-1">備考</label>
           <textarea id="edit-remarks" rows="3" maxlength="1000" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">${req.remarks || ''}</textarea>
         </div>
+        
+        <!-- Existing PDF files -->
+        <div class="border-t border-gray-200 pt-4">
+          <label class="block text-sm font-medium text-gray-700 mb-2">
+            <i class="fas fa-file-pdf text-red-500 mr-1"></i>
+            添付済みPDFファイル
+          </label>
+          ${existingFiles.length > 0 ? `
+            <div id="existing-files" class="space-y-2 mb-3">
+              ${existingFiles.map(f => `
+                <div class="flex items-center gap-3 p-3 bg-blue-50 rounded-lg border border-blue-200" data-file-id="${f.id}">
+                  <i class="fas fa-file-pdf text-red-500"></i>
+                  <div class="flex-1 min-w-0">
+                    <p class="text-sm font-medium text-gray-900 truncate">${f.file_name}</p>
+                    <p class="text-xs text-gray-500">${formatFileSize(f.file_size)} ・ 既存ファイル</p>
+                  </div>
+                  <button type="button" onclick="markFileForDeletion(this, '${f.id}', '${f.file_name.replace(/'/g, "\\'")}')" class="text-gray-400 hover:text-red-500 p-1" title="削除">
+                    <i class="fas fa-times"></i>
+                  </button>
+                </div>
+              `).join('')}
+            </div>
+          ` : '<p class="text-xs text-gray-400 mb-3">添付ファイルはありません</p>'}
+          
+          <label class="block text-sm font-medium text-gray-700 mb-2">新しいPDFを追加</label>
+          <div id="edit-pdf-drop-zone" class="border-2 border-dashed border-gray-300 rounded-lg p-4 text-center hover:border-blue-400 transition-colors cursor-pointer">
+            <i class="fas fa-cloud-upload-alt text-gray-400 text-xl mb-1"></i>
+            <p class="text-sm text-gray-600">PDFをドラッグ＆ドロップまたはクリック</p>
+            <button type="button" id="edit-pdf-select-btn" class="mt-1 px-3 py-1 text-xs bg-white border border-gray-300 rounded hover:bg-gray-50">ファイルを選択</button>
+            <input type="file" id="edit-pdf-file-input" accept=".pdf,application/pdf" multiple class="hidden">
+          </div>
+          <div id="edit-pdf-file-list" class="mt-2 space-y-2"></div>
+        </div>
+
         <div id="edit-error" class="text-red-600 text-sm hidden"></div>
         <div class="flex justify-end gap-3">
           <button type="button" onclick="navigate('request-detail',{id:'${id}'})" class="px-4 py-2 text-sm border border-gray-300 rounded-lg">キャンセル</button>
@@ -946,13 +1379,51 @@ async function renderEditRequest(main) {
       </form>
     </div>`;
   
+  // Track files to delete and new files to upload
+  const filesToDelete = [];
+  const newPendingFiles = [];
+  _currentPendingFiles = newPendingFiles;
+  _currentFileListId = 'edit-pdf-file-list';
+  
+  setupPdfDropZone('edit-pdf-drop-zone', 'edit-pdf-file-input', 'edit-pdf-select-btn', 'edit-pdf-file-list', newPendingFiles);
+  
+  // Mark file for deletion
+  window.markFileForDeletion = function(btn, fileId, fileName) {
+    const row = btn.closest('[data-file-id]');
+    if (filesToDelete.includes(fileId)) {
+      // Unmark
+      filesToDelete.splice(filesToDelete.indexOf(fileId), 1);
+      row.classList.remove('opacity-50', 'line-through');
+      row.classList.add('bg-blue-50', 'border-blue-200');
+      row.classList.remove('bg-red-50', 'border-red-200');
+      btn.innerHTML = '<i class="fas fa-times"></i>';
+      btn.title = '削除';
+    } else {
+      filesToDelete.push(fileId);
+      row.classList.add('opacity-50');
+      row.classList.remove('bg-blue-50', 'border-blue-200');
+      row.classList.add('bg-red-50', 'border-red-200');
+      btn.innerHTML = '<i class="fas fa-undo"></i>';
+      btn.title = '元に戻す';
+    }
+  };
+  
   document.getElementById('edit-form').onsubmit = async (e) => {
     e.preventDefault();
     const errEl = document.getElementById('edit-error');
     errEl.classList.add('hidden');
     const btn = document.getElementById('edit-submit');
     btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>送信中...';
+    
     try {
+      // Check that at least one file will remain after deletion + new uploads
+      const remainingExisting = existingFiles.filter(f => !filesToDelete.includes(f.id));
+      if (remainingExisting.length === 0 && newPendingFiles.length === 0) {
+        throw new Error('PDFファイルを1つ以上添付してください');
+      }
+      
+      // 1. Resubmit the request
       const body = {
         type: document.getElementById('edit-type').value,
         title: document.getElementById('edit-title').value,
@@ -962,12 +1433,33 @@ async function renderEditRequest(main) {
         remarks: document.getElementById('edit-remarks').value
       };
       await api(`/requests/${id}/resubmit`, { method: 'POST', body: JSON.stringify(body) });
-      showToast('再申請しました');
+      
+      // 2. Delete marked files
+      for (const fileId of filesToDelete) {
+        try { await api(`/files/${fileId}/delete`, { method: 'POST' }); } catch (e) { /* ignore */ }
+      }
+      
+      // 3. Upload new files
+      let uploadErrors = [];
+      for (const file of newPendingFiles) {
+        try {
+          await uploadPdfFile(id, file);
+        } catch (err) {
+          uploadErrors.push(`${file.name}: ${err.message}`);
+        }
+      }
+      
+      if (uploadErrors.length > 0) {
+        showToast('再申請しましたが一部ファイルのアップロードに失敗しました', 'error');
+      } else {
+        showToast('再申請とファイル更新が完了しました');
+      }
       navigate('request-detail', { id });
     } catch (err) {
       errEl.textContent = err.message;
       errEl.classList.remove('hidden');
       btn.disabled = false;
+      btn.innerHTML = '<i class="fas fa-paper-plane mr-1"></i>再申請する';
     }
   };
 }
@@ -1358,7 +1850,8 @@ async function renderAuditLogs(main) {
     request_processed: '処理済み', user_invited: 'ユーザー招待', user_role_changed: 'ロール変更',
     user_deactivated: 'ユーザー無効化', user_reactivated: 'ユーザー有効化', user_deleted: 'ユーザー削除',
     user_password_reset: 'パスワードリセット', approver_added: '承認者追加', approver_updated: '承認者更新',
-    approver_removed: '承認者削除', settings_changed: '設定変更'
+    approver_removed: '承認者削除', settings_changed: '設定変更',
+    file_uploaded: 'ファイルアップロード', file_deleted: 'ファイル削除'
   };
   
   main.innerHTML = `
