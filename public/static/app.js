@@ -95,6 +95,11 @@ function hasRole(role) {
   return state.user?.role?.includes(role);
 }
 
+function roleLabel(role) {
+  const map = { admin: '管理者', approver: '承認者', clerk: '事務員', applicant: '申請者' };
+  return map[role] || role;
+}
+
 // Navigation
 function navigate(page, params = {}) {
   state.currentPage = page;
@@ -191,10 +196,10 @@ function renderLogin(app) {
         </div>
         <form id="login-form" class="space-y-4">
           <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1">メールアドレス</label>
-            <input type="email" id="login-email" required
+            <label class="block text-sm font-medium text-gray-700 mb-1">ログインID（メールアドレス）</label>
+            <input type="text" id="login-email" required
               class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm" 
-              placeholder="user@example.com">
+              placeholder="user@example.com または ログインID">
           </div>
           <div>
             <label class="block text-sm font-medium text-gray-700 mb-1">パスワード</label>
@@ -255,7 +260,7 @@ function renderApp(app) {
             <span class="text-sm text-gray-600 hidden sm:inline">${userName}</span>
             <div class="flex gap-1">
               ${state.user?.role?.filter(r => r !== 'applicant').map(r => 
-                `<span class="text-xs px-2 py-0.5 rounded-full ${r === 'admin' ? 'bg-purple-100 text-purple-700' : r === 'approver' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'}">${r}</span>`
+                `<span class="text-xs px-2 py-0.5 rounded-full ${r === 'admin' ? 'bg-purple-100 text-purple-700' : r === 'approver' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'}">${roleLabel(r)}</span>`
               ).join('') || ''}
             </div>
             <button onclick="logout()" class="text-sm text-gray-500 hover:text-gray-700 ml-2" title="ログアウト">
@@ -1702,7 +1707,7 @@ async function renderAdminUsers(main) {
     <div class="flex items-center justify-between mb-4">
       <h1 class="text-xl font-bold text-gray-900">ユーザー管理</h1>
       <button onclick="showInviteUserModal()" class="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700">
-        <i class="fas fa-plus mr-1"></i>ユーザーを招待
+        <i class="fas fa-plus mr-1"></i>ユーザーを追加
       </button>
     </div>
     
@@ -1712,7 +1717,7 @@ async function renderAdminUsers(main) {
           <thead class="bg-gray-50 border-b border-gray-200">
             <tr>
               <th class="px-4 py-3 text-left font-medium text-gray-500">氏名</th>
-              <th class="px-4 py-3 text-left font-medium text-gray-500">メール</th>
+              <th class="px-4 py-3 text-left font-medium text-gray-500">ログインID</th>
               <th class="px-4 py-3 text-left font-medium text-gray-500">ロール</th>
               <th class="px-4 py-3 text-center font-medium text-gray-500">状態</th>
               <th class="px-4 py-3 text-center font-medium text-gray-500">操作</th>
@@ -1727,7 +1732,7 @@ async function renderAdminUsers(main) {
                   <td class="px-4 py-3 text-gray-600">${u.email}</td>
                   <td class="px-4 py-3">
                     <div class="flex flex-wrap gap-1">
-                      ${roles.map(r => `<span class="text-xs px-2 py-0.5 rounded-full ${r==='admin'?'bg-purple-100 text-purple-700':r==='approver'?'bg-blue-100 text-blue-700':r==='clerk'?'bg-yellow-100 text-yellow-700':'bg-gray-100 text-gray-600'}">${r}</span>`).join('')}
+                      ${roles.map(r => `<span class="text-xs px-2 py-0.5 rounded-full ${r==='admin'?'bg-purple-100 text-purple-700':r==='approver'?'bg-blue-100 text-blue-700':r==='clerk'?'bg-yellow-100 text-yellow-700':'bg-gray-100 text-gray-600'}">${roleLabel(r)}</span>`).join('')}
                     </div>
                   </td>
                   <td class="px-4 py-3 text-center">
@@ -1746,15 +1751,15 @@ async function renderAdminUsers(main) {
 }
 
 function showInviteUserModal() {
-  showModal('ユーザーを招待', `
+  showModal('ユーザーを追加', `
     <div class="space-y-4">
       <div>
-        <label class="block text-sm font-medium text-gray-700 mb-1">メールアドレス <span class="text-red-500">*</span></label>
-        <input type="email" id="invite-email" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+        <label class="block text-sm font-medium text-gray-700 mb-1">氏名 <span class="text-red-500">*</span></label>
+        <input type="text" id="invite-name" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" placeholder="山田 太郎">
       </div>
       <div>
-        <label class="block text-sm font-medium text-gray-700 mb-1">氏名 <span class="text-red-500">*</span></label>
-        <input type="text" id="invite-name" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+        <label class="block text-sm font-medium text-gray-700 mb-1">メールアドレス <span class="text-xs text-gray-400 font-normal">（任意）</span></label>
+        <input type="email" id="invite-email" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" placeholder="未入力の場合、ログインIDが自動生成されます">
       </div>
       <div>
         <label class="block text-sm font-medium text-gray-700 mb-1">ロール</label>
@@ -1767,17 +1772,19 @@ function showInviteUserModal() {
       </div>
     </div>`,
     `<button onclick="closeModal()" class="px-4 py-2 text-sm border border-gray-300 rounded-lg">キャンセル</button>
-     <button id="invite-btn" class="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700">招待する</button>`
+     <button id="invite-btn" class="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700">追加する</button>`
   );
   document.getElementById('invite-btn').onclick = async () => {
+    const name = document.getElementById('invite-name').value.trim();
+    if (!name) { showToast('氏名を入力してください', 'error'); return; }
     const roles = ['applicant'];
     if (document.getElementById('invite-approver').checked) roles.push('approver');
     if (document.getElementById('invite-clerk').checked) roles.push('clerk');
     if (document.getElementById('invite-admin').checked) roles.push('admin');
     try {
       const res = await api('/admin/users/invite', { method: 'POST', body: JSON.stringify({
-        email: document.getElementById('invite-email').value,
-        displayName: document.getElementById('invite-name').value,
+        email: document.getElementById('invite-email').value.trim() || '',
+        displayName: name,
         roles
       })});
       closeModal();
@@ -1794,7 +1801,7 @@ async function showEditUserModal(userId) {
   const roles = JSON.parse(user.role);
   
   showModal(`ユーザー編集：${user.display_name}`, `
-    <p class="text-sm text-gray-500 mb-4">${user.email}</p>
+    <p class="text-sm text-gray-500 mb-4">ログインID：${user.email}</p>
     <div class="space-y-4">
       <div>
         <label class="block text-sm font-medium text-gray-700 mb-1">氏名</label>

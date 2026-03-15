@@ -9,7 +9,7 @@ export const authRoutes = new Hono<{ Bindings: Bindings }>()
 authRoutes.post('/login', async (c) => {
   const { email, password } = await c.req.json()
   if (!email || !password) {
-    return c.json({ error: 'メールアドレスとパスワードを入力してください' }, 400)
+    return c.json({ error: 'ログインIDとパスワードを入力してください' }, 400)
   }
 
   const user = await c.env.DB.prepare(
@@ -17,12 +17,12 @@ authRoutes.post('/login', async (c) => {
   ).bind(email).first()
 
   if (!user) {
-    return c.json({ error: 'メールアドレスまたはパスワードが正しくありません' }, 401)
+    return c.json({ error: 'ログインIDまたはパスワードが正しくありません' }, 401)
   }
 
   const valid = await verifyPassword(password, user.password_hash as string)
   if (!valid) {
-    return c.json({ error: 'メールアドレスまたはパスワードが正しくありません' }, 401)
+    return c.json({ error: 'ログインIDまたはパスワードが正しくありません' }, 401)
   }
 
   const token = await createToken({

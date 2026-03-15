@@ -33,13 +33,21 @@ adminRoutes.post('/users/invite', async (c) => {
   if (!admin) return c.json({ error: '管理者権限が必要です' }, 403)
 
   const { email, displayName, roles } = await c.req.json()
-  if (!email || !displayName) return c.json({ error: 'メールアドレスと氏名を入力してください' }, 400)
+  if (!displayName) return c.json({ error: '氏名を入力してください' }, 400)
+
+  // If email is empty, generate a login ID from display name (romanized slug)
+  let loginId = (email || '').trim()
+  if (!loginId) {
+    // Generate login ID: user_<random>
+    const randomPart = generateId().substring(0, 8)
+    loginId = `user_${randomPart}`
+  }
 
   // Check duplicate
   const existing = await c.env.DB.prepare(
     'SELECT id FROM profiles WHERE email = ?'
-  ).bind(email).first()
-  if (existing) return c.json({ error: 'このメールアドレスは既に登録されています' }, 400)
+  ).bind(loginId).first()
+  if (existing) return c.json({ error: 'このログインID（メールアドレス）は既に登録されています' }, 400)
 
   // Ensure applicant role is always included
   const roleArray = Array.isArray(roles) ? roles : ['applicant']
@@ -51,15 +59,15 @@ adminRoutes.post('/users/invite', async (c) => {
 
   await c.env.DB.prepare(
     'INSERT INTO profiles (id, email, display_name, password_hash, role, is_active) VALUES (?, ?, ?, ?, ?, 1)'
-  ).bind(id, email, displayName, passwordHash, JSON.stringify(roleArray)).run()
+  ).bind(id, loginId, displayName, passwordHash, JSON.stringify(roleArray)).run()
 
   // Audit log
   await c.env.DB.prepare(
     `INSERT INTO audit_logs (id, user_id, action, target_table, target_id, detail)
      VALUES (?, ?, 'user_invited', 'profiles', ?, ?)`
-  ).bind(generateId(), admin.userId, id, JSON.stringify({ email, roles: roleArray })).run()
+  ).bind(generateId(), admin.userId, id, JSON.stringify({ email: loginId, roles: roleArray })).run()
 
-  return c.json({ id, message: 'ユーザーを招待しました。初期パスワード: Workflow2026!' })
+  return c.json({ id, message: `ユーザーを追加しました。ログインID: ${loginId}　初期パスワード: Workflow2026!` })
 })
 
 // ユーザー更新
