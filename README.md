@@ -1,144 +1,165 @@
-# 申請承認ワークフローシステム
+# 申請承認ワークフロー
 
 ## プロジェクト概要
+- **名称**: 申請承認ワークフロー
+- **目的**: 見積もり・請求書の申請 → 承認 → 通知までを0円で実現するWebワークフローシステム
+- **技術スタック**: Hono (TypeScript) + Cloudflare D1 (SQLite) + Tailwind CSS + Vanilla JS SPA
 
-見積もり・請求書の申請から承認・通知までの一連のワークフローをWebアプリとしてシステム化するツール。
-紙・口頭・メールでの属人的なやり取りを排除し、申請の透明性・追跡可能性・業務効率を確保する。
+## アクセスURL
+- **サンドボックス**: https://3000-ito5dw6lflli4i8xip2ly-02b9cc79.sandbox.novita.ai
 
-## 技術スタック
-
-| レイヤー | 技術 |
-|---|---|
-| フレームワーク | Hono (TypeScript) |
-| フロントエンド | Vanilla JS + Tailwind CSS (CDN) |
-| データベース | Cloudflare D1 (SQLite) |
-| ホスティング | Cloudflare Pages |
-| 認証 | JWT (HMAC-SHA256) |
+## デモアカウント（パスワード: password123）
+| ロール | メールアドレス | 名前 | 備考 |
+|--------|---------------|------|------|
+| 管理者 | admin@example.com | 岩野 管理者 | 全権限、承認STEP3 |
+| 承認者 | suzuki@example.com | 鈴木 一郎 | 承認STEP1（経理担当） |
+| 承認者 | takahashi@example.com | 高橋 部長 | 承認STEP2（事業部長） |
+| 事務員 | yamamoto@example.com | 山本 事務 | 処理済み操作権限 |
+| 申請者 | sato@example.com | 佐藤 花子 | 一般申請者 |
+| 申請者 | tanaka@example.com | 田中 一郎 | 一般申請者 |
 
 ## 実装済み機能
 
-### 認証
-- メール + パスワードによるログイン
-- JWT トークンベースのセッション管理
-- パスワード変更機能
+### 認証・ユーザー管理
+- メール/パスワードログイン（JWT HMAC-SHA256）
+- 4ロール: applicant, approver, clerk, admin（複数兼務可）
+- ユーザー招待・編集・無効化・削除・パスワードリセット
 
-### 申請機能
-- 新規申請（見積もり / 請求書）
-- 申請入力: 種別、件名、取引先名、金額(税抜)、税率(10%/8%/0%)、税込金額(自動計算)、備考
-- 取下げ（pending時のみ）
-- 差戻し後の再申請（既存値プリセット + バージョン管理）
+### PDFアップロード（見積書・請求書）
+- **PDF形式のみ対応**（.pdf拡張子、application/pdf MIMEタイプ、マジックバイト検証）
+- **1ファイル最大10MB、1申請最大10ファイル**
+- ドラッグ＆ドロップまたはファイル選択でアップロード
+- アップロード済みPDFのプレビュー（モーダル内iframe表示）
+- PDFダウンロード
+- ファイル削除（申請者・管理者のみ、承認中/差戻し状態のみ）
+- D1 BLOBストレージによるバイナリデータ保存
+- 新規申請時はPDF添付必須
+- 再申請時に既存PDFの引き継ぎ・追加・削除が可能
 
-### 承認機能
-- 3段階承認チェーン（経理 → 事業部長 → 管理部）
-- 順序保証（前ステップ承認後のみ次ステップ操作可）
-- 承認コメント（任意）/ 差戻しコメント（必須）
-- 自己承認防止（申請者が承認者に含まれる場合は自動スキップ）
-- 二重承認防止（WHERE status = 'waiting'）
-- クイック承認（ダッシュボードから直接）
+### 申請ワークフロー
+- 申請種別: 見積もり / 請求書
+- 申請情報: 件名、取引先名、金額（税抜）、税率（10%/8%/0%）、税込金額自動計算、備考
+- **PDFファイル添付**（見積書・請求書の実物PDF）
+- 3段階順序付き承認フロー（経理担当 → 事業部長 → 管理部）
+- 自己承認防止（申請者がステップに含まれる場合は自動スキップ）
+- 二重承認防止（楽観ロック）
+- 前ステップ完了チェック
 
-### 管理機能（admin のみ）
-- ユーザー管理: 招待、ロール変更、無効化/有効化、パスワードリセット、削除
-- 承認者マスタ管理: 追加、順序変更、ラベル編集、無効化/削除
-- システム設定: 通知先メール、システム名、リマインド設定
-- 監査ログ: 全操作履歴の閲覧（フィルタ・ページネーション付き）
-- 承認者振替（進行中申請の承認者変更）
-- CSVエクスポート
+### 差戻し・再申請・取下げ
+- 差戻し: コメント必須、申請者に通知
+- 再申請: 前回データプリセット、バージョン管理、PDFの引き継ぎ/差替え
+- 取下げ: 承認中の申請のみ可
 
-### ロール・権限
-- **applicant**: 全ユーザーの基本ロール（申請作成・閲覧・取下げ）
-- **approver**: 担当ステップの承認/差戻し
-- **clerk**: completed → processed への更新
-- **admin**: 全操作・管理画面アクセス
+### 管理機能
+- 承認者マスタ管理（追加・編集・並び替え・無効化・削除）
+- 承認者振替（管理者がウェイティング中のステップの担当者を変更）
+- システム設定（通知先メール、リマインド間隔・回数）
+- 監査ログ（全操作記録、フィルタリング、ページネーション）
+- CSV一括エクスポート
 
-### ステータスフロー
-```
-pending → approved(各ステップ) → completed → processed
-pending → rejected（差戻し）→ 修正して再申請 → pending
-pending → withdrawn（取下げ）
-```
+## APIエンドポイント一覧
 
-## 画面一覧（URI）
+### 認証 `/api/auth`
+| メソッド | パス | 説明 |
+|---------|------|------|
+| POST | /login | ログイン |
+| GET | /me | 現在のユーザー情報取得 |
+| POST | /change-password | パスワード変更 |
 
-| パス | 画面 | ロール |
-|---|---|---|
-| `/login` | ログイン | 全員 |
-| `/` | ダッシュボード | 全員 |
-| `/requests/new` | 新規申請 | 全員 |
-| `/requests` | 申請一覧 | 全員 |
-| `/requests/:id` | 申請詳細 / 承認 | 関係者 |
-| `/requests/:id/edit` | 再申請（修正） | 申請者(rejected時) |
-| `/admin/users` | ユーザー管理 | admin |
-| `/admin/approvers` | 承認者設定 | admin |
-| `/admin/settings` | システム設定 | admin |
-| `/admin/audit-logs` | 監査ログ | admin |
+### 申請 `/api/requests`
+| メソッド | パス | 説明 |
+|---------|------|------|
+| GET | / | 申請一覧（?page=&status=&type=&keyword=） |
+| GET | /:id | 申請詳細（ステップ・ファイル含む） |
+| POST | / | 新規申請作成 |
+| POST | /:id/withdraw | 取下げ |
+| POST | /:id/resubmit | 再申請 |
 
-## API エンドポイント
+### ファイル `/api/files`
+| メソッド | パス | 説明 |
+|---------|------|------|
+| POST | /upload | PDFアップロード（multipart/form-data） |
+| GET | /:fileId/download | PDFダウンロード |
+| GET | /:fileId/preview | PDFプレビュー（iframe用、?token=対応） |
+| POST | /:fileId/delete | ファイル削除 |
+| GET | /list/:requestId | ファイル一覧（メタデータのみ） |
 
-| メソッド | パス | 機能 |
-|---|---|---|
-| POST | `/api/auth/login` | ログイン |
-| GET | `/api/auth/me` | 現在ユーザー取得 |
-| POST | `/api/auth/change-password` | パスワード変更 |
-| GET | `/api/requests` | 申請一覧 |
-| GET | `/api/requests/:id` | 申請詳細 |
-| POST | `/api/requests` | 新規申請 |
-| POST | `/api/requests/:id/withdraw` | 取下げ |
-| POST | `/api/requests/:id/resubmit` | 再申請 |
-| POST | `/api/approvals/approve` | 承認 |
-| POST | `/api/approvals/reject` | 差戻し |
-| POST | `/api/approvals/process` | 処理済み |
-| POST | `/api/approvals/reassign` | 承認者振替 |
-| GET | `/api/admin/users` | ユーザー一覧 |
-| POST | `/api/admin/users/invite` | ユーザー招待 |
-| POST | `/api/admin/users/:id/update` | ユーザー更新 |
-| POST | `/api/admin/users/:id/delete` | ユーザー削除 |
-| POST | `/api/admin/users/:id/reset-password` | パスワードリセット |
-| GET | `/api/admin/approvers` | 承認者一覧 |
-| POST | `/api/admin/approvers` | 承認者追加 |
-| POST | `/api/admin/approvers/:id/update` | 承認者更新 |
-| POST | `/api/admin/approvers/:id/delete` | 承認者削除 |
-| POST | `/api/admin/approvers/reorder` | 順序一括更新 |
-| GET | `/api/admin/settings` | 設定取得 |
-| POST | `/api/admin/settings` | 設定更新 |
-| GET | `/api/admin/audit-logs` | 監査ログ |
-| GET | `/api/admin/export/requests` | CSV エクスポート |
-| GET | `/api/dashboard` | ダッシュボード |
+### 承認 `/api/approvals`
+| メソッド | パス | 説明 |
+|---------|------|------|
+| POST | /approve | 承認 |
+| POST | /reject | 差戻し |
+| POST | /process | 処理済みに更新 |
+| POST | /reassign | 承認者振替 |
 
-## デモアカウント
+### 管理 `/api/admin`
+| メソッド | パス | 説明 |
+|---------|------|------|
+| GET/POST | /users/* | ユーザー管理 |
+| GET/POST | /approvers/* | 承認者マスタ管理 |
+| GET/POST | /settings | システム設定 |
+| GET | /audit-logs | 監査ログ |
+| GET | /export/requests | CSV出力 |
 
-| 名前 | メール | パスワード | ロール |
-|---|---|---|---|
-| 岩野 管理者 | admin@example.com | password123 | applicant, approver, admin |
-| 鈴木 一郎 | suzuki@example.com | password123 | applicant, approver |
-| 高橋 部長 | takahashi@example.com | password123 | applicant, approver |
-| 山本 事務 | yamamoto@example.com | password123 | applicant, clerk |
-| 佐藤 花子 | sato@example.com | password123 | applicant |
-| 田中 一郎 | tanaka@example.com | password123 | applicant |
+### ダッシュボード `/api/dashboard`
+| メソッド | パス | 説明 |
+|---------|------|------|
+| GET | / | サマリー・承認待ち・最近の申請 |
+| GET | /approver-candidates | 承認者候補リスト |
+| GET | /active-users | アクティブユーザーリスト |
 
-## データベーステーブル
+## データモデル
+- **profiles**: ユーザー情報（email, display_name, password_hash, role, is_active）
+- **requests**: 申請データ（type, title, client_name, amount, tax_rate, status, version）
+- **approval_steps**: 承認ステップ（request_id, step_order, approver_id, status, comment）
+- **request_files**: 添付PDF（file_name, file_size, mime_type, **file_data (BLOB)**）
+- **approver_master**: 承認者マスタ（user_id, step_order, label, is_active）
+- **notification_logs**: 通知ログ（recipient_email, notification_type, status）
+- **audit_logs**: 監査ログ（user_id, action, target_table, detail）
+- **settings**: システム設定（key-value）
+- **sequences**: 採番（request_number）
 
-- **profiles**: ユーザー情報（ID, メール, 表示名, パスワードハッシュ, ロール, 有効フラグ）
-- **requests**: 申請データ（採番, 種別, 金額, ステータス, バージョン）
-- **approval_steps**: 承認ステップ（承認者, 順序, ステータス, コメント, バージョン）
-- **approver_master**: 承認者マスタ（承認順序, ラベル, 有効フラグ）
-- **request_files**: 添付ファイル管理
-- **notification_logs**: 通知ログ
-- **audit_logs**: 監査ログ
-- **settings**: システム設定（JSONB）
-- **sequences**: 自動採番管理
+## 画面構成
+1. ログイン画面
+2. ダッシュボード（サマリーカード、承認待ち一覧、最近の申請）
+3. 新規申請フォーム（PDF添付必須）
+4. 申請一覧（フィルタ・ページネーション）
+5. 申請詳細（PDF表示・ダウンロード、承認進捗タイムライン、承認/差戻し操作）
+6. 修正・再申請フォーム（PDF引き継ぎ/追加/削除）
+7. ユーザー管理（管理者のみ）
+8. 承認者設定（管理者のみ）
+9. システム設定（管理者のみ）
+10. 監査ログ（管理者のみ）
 
-## ローカル開発
+## UI/UXデザイン
+- 白背景、ブルーアクセント
+- Tailwind CSS（CDN）+ Font Awesome
+- レスポンシブ対応（モバイルメニュー）
+- トースト通知、モーダルダイアログ
+- スケルトンローディング
 
-```bash
-npm install
-npm run build
-npm run db:migrate:local
-npm run db:seed
-npm run dev:sandbox
-```
+## 技術詳細
+| 項目 | 内容 |
+|------|------|
+| バックエンド | Hono (TypeScript) on Cloudflare Workers |
+| データベース | Cloudflare D1 (SQLite) |
+| PDFストレージ | D1 BLOB（request_files.file_data） |
+| 認証 | HMAC-SHA256 JWT、SHA-256パスワードハッシュ |
+| フロントエンド | Vanilla JS SPA + Tailwind CSS CDN |
+| ビルド | Vite + @hono/vite-build/cloudflare-pages |
+| 開発サーバー | wrangler pages dev (PM2管理) |
 
-## デプロイステータス
+## 未実装・将来拡張
+- SendGrid連携によるメール通知（スキーマ・API定義済み）
+- Slack通知
+- PDF帳票自動生成
+- 承認条件分岐（金額閾値等）
+- 追加申請種別
+- pg_cronダミークエリによる停止対策
+- Cloudflare R2へのファイルストレージ移行（大容量対応）
+- ウイルス/マルウェアスキャン
 
+## デプロイ
 - **プラットフォーム**: Cloudflare Pages
-- **状態**: 開発中
-- **最終更新**: 2026年3月15日
+- **ステータス**: サンドボックス稼働中
+- **最終更新**: 2026-03-15
