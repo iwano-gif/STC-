@@ -188,10 +188,8 @@ function renderLogin(app) {
     <div class="min-h-screen flex items-center justify-center bg-gray-50 px-4">
       <div class="bg-white rounded-lg shadow-sm border border-gray-200 w-full max-w-sm p-8">
         <div class="text-center mb-6">
-          <div class="inline-flex items-center justify-center w-12 h-12 rounded-full bg-blue-100 mb-3">
-            <i class="fas fa-file-invoice text-blue-600 text-xl"></i>
-          </div>
-          <h1 class="text-xl font-bold text-gray-900">申請承認ワークフロー</h1>
+          <img src="/static/logo.png" alt="STC" class="w-16 h-16 mx-auto mb-3 rounded-full object-cover shadow-sm">
+          <h1 class="text-xl font-bold text-gray-900">STC 申請承認ワークフロー</h1>
           <p class="text-sm text-gray-500 mt-1">ログインしてください</p>
         </div>
         <form id="login-form" class="space-y-4">
@@ -245,8 +243,8 @@ function renderApp(app) {
               <i class="fas fa-bars text-gray-600"></i>
             </button>
             <a href="/" onclick="event.preventDefault();navigate('dashboard')" class="flex items-center gap-2">
-              <i class="fas fa-file-invoice text-blue-600"></i>
-              <span class="font-semibold text-sm hidden sm:inline">申請承認ワークフロー</span>
+              <img src="/static/logo.png" alt="STC" class="w-7 h-7 rounded-full object-cover">
+              <span class="font-semibold text-sm hidden sm:inline">STC ワークフロー</span>
             </a>
           </div>
           <div class="flex items-center gap-3">

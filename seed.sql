@@ -2,7 +2,7 @@
 
 -- 管理者（岩野）※管理者+申請者
 INSERT OR IGNORE INTO profiles (id, email, display_name, password_hash, role, is_active) VALUES
-  ('admin-001', 'iwano_admin', '岩野', '321e5769d06538dba1c84d890d4f9596f6a7c9d04b9086e1b508657ad7d295b0', '["applicant","admin"]', 1);
+  ('admin-001', 'iwano_admin', '岩野 太亮', '321e5769d06538dba1c84d890d4f9596f6a7c9d04b9086e1b508657ad7d295b0', '["applicant","admin"]', 1);
 
 -- 承認者①（新地 美智子 ─ 経理担当）
 INSERT OR IGNORE INTO profiles (id, email, display_name, password_hash, role, is_active) VALUES
