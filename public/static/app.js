@@ -214,10 +214,9 @@ function renderLogin(app) {
         </form>
         <div class="mt-6 p-3 bg-gray-50 rounded-lg text-xs text-gray-500">
           <p class="font-medium mb-1">デモアカウント（パスワード: password123）</p>
-          <p>管理者: admin@example.com</p>
-          <p>承認者: suzuki@example.com / takahashi@example.com</p>
-          <p>事務員: yamamoto@example.com</p>
-          <p>申請者: sato@example.com / tanaka@example.com</p>
+          <p>管理者: iwano</p>
+          <p>承認者①（経理）: shinchi.m</p>
+          <p>承認者②（代表）: shinchi.t</p>
         </div>
       </div>
     </div>`;
@@ -1889,29 +1888,42 @@ async function renderAdminApprovers(main) {
       </button>
     </div>
     
+    <div class="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4 text-sm text-blue-800">
+      <i class="fas fa-info-circle mr-1"></i>
+      承認フローは上から順に実行されます。担当者の入れ替え・ラベル変更・順序変更・追加・削除が可能です。
+      <br>変更は次回の新規申請から反映されます（処理中の申請には影響しません）。
+    </div>
+    
     <div class="bg-white border border-gray-200 rounded-lg overflow-hidden">
       <table class="w-full text-sm">
         <thead class="bg-gray-50 border-b border-gray-200">
           <tr>
-            <th class="px-4 py-3 text-left font-medium text-gray-500">順序</th>
-            <th class="px-4 py-3 text-left font-medium text-gray-500">氏名</th>
+            <th class="px-4 py-3 text-center font-medium text-gray-500 w-16">順序</th>
+            <th class="px-4 py-3 text-left font-medium text-gray-500">担当者</th>
             <th class="px-4 py-3 text-left font-medium text-gray-500">役職ラベル</th>
-            <th class="px-4 py-3 text-center font-medium text-gray-500">状態</th>
-            <th class="px-4 py-3 text-center font-medium text-gray-500">操作</th>
+            <th class="px-4 py-3 text-center font-medium text-gray-500 w-20">状態</th>
+            <th class="px-4 py-3 text-center font-medium text-gray-500 w-32">操作</th>
           </tr>
         </thead>
         <tbody class="divide-y divide-gray-100">
           ${data.approvers.map(a => `
-            <tr class="${!a.is_active?'opacity-50':''}">
-              <td class="px-4 py-3 font-medium">${a.step_order}</td>
-              <td class="px-4 py-3">${a.display_name}（${a.email}）</td>
-              <td class="px-4 py-3">${a.label}</td>
+            <tr class="${!a.is_active?'opacity-50 bg-gray-50':''}">
+              <td class="px-4 py-3 text-center">
+                <span class="inline-flex items-center justify-center w-7 h-7 rounded-full bg-blue-100 text-blue-700 font-bold text-sm">${a.step_order}</span>
+              </td>
+              <td class="px-4 py-3">
+                <div class="font-medium">${a.display_name}</div>
+                <div class="text-xs text-gray-400">${a.email}</div>
+              </td>
+              <td class="px-4 py-3 text-gray-700">${a.label}</td>
               <td class="px-4 py-3 text-center">
                 <span class="text-xs px-2 py-0.5 rounded-full ${a.is_active?'bg-green-100 text-green-700':'bg-red-100 text-red-700'}">${a.is_active?'有効':'無効'}</span>
               </td>
               <td class="px-4 py-3 text-center">
-                <button onclick="showEditApproverModal('${a.id}','${a.label}',${a.step_order},${a.is_active})" class="text-blue-600 hover:text-blue-800 mr-2"><i class="fas fa-edit"></i></button>
-                <button onclick="deleteApprover('${a.id}')" class="text-red-600 hover:text-red-800"><i class="fas fa-trash"></i></button>
+                <div class="flex items-center justify-center gap-1">
+                  <button onclick="showEditApproverModal('${a.id}','${a.label}',${a.step_order},${a.is_active},'${a.user_id}')" class="text-blue-600 hover:text-blue-800 p-1" title="編集"><i class="fas fa-edit"></i></button>
+                  <button onclick="deleteApprover('${a.id}')" class="text-red-600 hover:text-red-800 p-1" title="削除"><i class="fas fa-trash"></i></button>
+                </div>
               </td>
             </tr>
           `).join('')}
@@ -1919,7 +1931,7 @@ async function renderAdminApprovers(main) {
       </table>
     </div>
     <p class="text-sm text-gray-500 mt-3">
-      <i class="fas fa-info-circle mr-1"></i>変更は次回の新規申請から反映されます
+      有効：${data.approvers.filter(a=>a.is_active).length}名　合計：${data.approvers.length}名
     </p>`;
 }
 
@@ -1959,9 +1971,21 @@ async function showAddApproverModal() {
   };
 }
 
-function showEditApproverModal(id, label, stepOrder, isActive) {
+async function showEditApproverModal(id, label, stepOrder, isActive, currentUserId) {
+  // Load approver candidates for user swap
+  const candidates = await api('/dashboard/approver-candidates');
+  
   showModal('承認者を編集', `
     <div class="space-y-4">
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">
+          <i class="fas fa-user-edit mr-1 text-blue-500"></i>担当者を変更
+        </label>
+        <select id="edit-approver-user" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+          ${candidates.users.map(u => `<option value="${u.id}" ${u.id === currentUserId ? 'selected' : ''}>${u.display_name}（${u.email}）</option>`).join('')}
+        </select>
+        <p class="text-xs text-gray-400 mt-1">別の人に担当を入れ替えられます</p>
+      </div>
       <div>
         <label class="block text-sm font-medium text-gray-700 mb-1">役職ラベル</label>
         <input type="text" id="edit-approver-label" value="${label}" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
@@ -1982,11 +2006,13 @@ function showEditApproverModal(id, label, stepOrder, isActive) {
      <button id="edit-approver-btn" class="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700">保存する</button>`
   );
   document.getElementById('edit-approver-btn').onclick = async () => {
+    const newUserId = document.getElementById('edit-approver-user').value;
     try {
       await api(`/admin/approvers/${id}/update`, { method: 'POST', body: JSON.stringify({
         label: document.getElementById('edit-approver-label').value,
         stepOrder: parseInt(document.getElementById('edit-approver-order').value),
-        isActive: document.getElementById('edit-approver-active').value === '1'
+        isActive: document.getElementById('edit-approver-active').value === '1',
+        userId: newUserId !== currentUserId ? newUserId : undefined
       })});
       closeModal();
       showToast('承認者を更新しました');

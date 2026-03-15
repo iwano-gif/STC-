@@ -234,16 +234,29 @@ adminRoutes.post('/approvers/:id/update', async (c) => {
   if (!admin) return c.json({ error: '管理者権限が必要です' }, 403)
 
   const id = c.req.param('id')
-  const { label, stepOrder, isActive } = await c.req.json()
+  const { label, stepOrder, isActive, userId } = await c.req.json()
 
-  await c.env.DB.prepare(
-    "UPDATE approver_master SET label = COALESCE(?, label), step_order = COALESCE(?, step_order), is_active = COALESCE(?, is_active), updated_at = datetime('now') WHERE id = ?"
-  ).bind(label || null, stepOrder || null, isActive !== undefined ? (isActive ? 1 : 0) : null, id).run()
+  // If userId is provided, swap the user for this approver step
+  if (userId) {
+    const user = await c.env.DB.prepare('SELECT * FROM profiles WHERE id = ?').bind(userId).first()
+    if (!user) return c.json({ error: 'ユーザーが見つかりません' }, 404)
+    const roles = JSON.parse(user.role as string)
+    if (!roles.includes('approver')) {
+      return c.json({ error: 'このユーザーには承認者ロールがありません' }, 400)
+    }
+    await c.env.DB.prepare(
+      "UPDATE approver_master SET user_id = ?, label = COALESCE(?, label), step_order = COALESCE(?, step_order), is_active = COALESCE(?, is_active), updated_at = datetime('now') WHERE id = ?"
+    ).bind(userId, label || null, stepOrder || null, isActive !== undefined ? (isActive ? 1 : 0) : null, id).run()
+  } else {
+    await c.env.DB.prepare(
+      "UPDATE approver_master SET label = COALESCE(?, label), step_order = COALESCE(?, step_order), is_active = COALESCE(?, is_active), updated_at = datetime('now') WHERE id = ?"
+    ).bind(label || null, stepOrder || null, isActive !== undefined ? (isActive ? 1 : 0) : null, id).run()
+  }
 
   await c.env.DB.prepare(
     `INSERT INTO audit_logs (id, user_id, action, target_table, target_id, detail)
      VALUES (?, ?, 'approver_updated', 'approver_master', ?, ?)`
-  ).bind(generateId(), admin.userId, id, JSON.stringify({ label, stepOrder, isActive })).run()
+  ).bind(generateId(), admin.userId, id, JSON.stringify({ label, stepOrder, isActive, userId })).run()
 
   return c.json({ message: '承認者を更新しました' })
 })
