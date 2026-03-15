@@ -1,14 +1,14 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "webapp",
+  "name": "workflow-app",
   "compatibility_date": "2026-03-15",
   "pages_build_output_dir": "./dist",
   "compatibility_flags": ["nodejs_compat"],
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "webapp-production",
-      "database_id": "local-dev"
+      "database_name": "workflow-app-production",
+      "database_id": "94c96289-15e8-4c02-b7f0-7d04bfc82882"
     }
   ]
 }
