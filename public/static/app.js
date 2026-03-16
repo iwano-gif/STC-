@@ -989,21 +989,37 @@ async function renderRequestList(main) {
                 <th class="px-4 py-3 text-left font-medium text-gray-500">申請者</th>
                 <th class="px-4 py-3 text-center font-medium text-gray-500">状態</th>
                 <th class="px-4 py-3 text-left font-medium text-gray-500">申請日</th>
+                <th class="px-4 py-3 text-center font-medium text-gray-500">操作</th>
               </tr>
             </thead>
             <tbody class="divide-y divide-gray-100">
-              ${data.requests.map(r => `
-                <tr class="hover:bg-gray-50 cursor-pointer" onclick="navigate('request-detail',{id:'${r.id}'})">
-                  <td class="px-4 py-3 font-mono text-gray-500">${String(r.request_number).padStart(4,'0')}</td>
-                  <td class="px-4 py-3">${typeLabel(r.type)}</td>
-                  <td class="px-4 py-3 font-medium max-w-[200px] truncate">${r.title}</td>
-                  <td class="px-4 py-3 text-gray-600 max-w-[150px] truncate">${r.client_name}</td>
-                  <td class="px-4 py-3 text-right font-medium">${formatCurrency(r.amount_with_tax)}</td>
-                  <td class="px-4 py-3 text-gray-600">${r.applicant_name}</td>
-                  <td class="px-4 py-3 text-center">${statusBadge(r.status)}</td>
-                  <td class="px-4 py-3 text-gray-500 text-xs">${formatDate(r.created_at)}</td>
-                </tr>
-              `).join('')}
+              ${data.requests.map(r => {
+                const isMine = r.applicant_id === state.user?.id;
+                const amAdmin = hasRole('admin');
+                const canWithdraw = isMine && r.status === 'pending';
+                const canDeleteApplicant = isMine && ['withdrawn','rejected','completed','processed'].includes(r.status);
+                const canDeleteAdmin = amAdmin && !isMine;
+                const showActions = canWithdraw || canDeleteApplicant || canDeleteAdmin;
+                return `
+                <tr class="hover:bg-gray-50">
+                  <td class="px-4 py-3 font-mono text-gray-500 cursor-pointer" onclick="navigate('request-detail',{id:'${r.id}'})">${String(r.request_number).padStart(4,'0')}</td>
+                  <td class="px-4 py-3 cursor-pointer" onclick="navigate('request-detail',{id:'${r.id}'})">${typeLabel(r.type)}</td>
+                  <td class="px-4 py-3 font-medium max-w-[200px] truncate cursor-pointer" onclick="navigate('request-detail',{id:'${r.id}'})">${r.title}</td>
+                  <td class="px-4 py-3 text-gray-600 max-w-[150px] truncate cursor-pointer" onclick="navigate('request-detail',{id:'${r.id}'})">${r.client_name}</td>
+                  <td class="px-4 py-3 text-right font-medium cursor-pointer" onclick="navigate('request-detail',{id:'${r.id}'})">${formatCurrency(r.amount_with_tax)}</td>
+                  <td class="px-4 py-3 text-gray-600 cursor-pointer" onclick="navigate('request-detail',{id:'${r.id}'})">${r.applicant_name}</td>
+                  <td class="px-4 py-3 text-center cursor-pointer" onclick="navigate('request-detail',{id:'${r.id}'})">${statusBadge(r.status)}</td>
+                  <td class="px-4 py-3 text-gray-500 text-xs cursor-pointer" onclick="navigate('request-detail',{id:'${r.id}'})">${formatDate(r.created_at)}</td>
+                  <td class="px-4 py-3 text-center">
+                    ${showActions ? `
+                      <div class="flex items-center justify-center gap-1">
+                        ${canWithdraw ? `<button onclick="event.stopPropagation();doWithdraw('${r.id}')" class="px-2 py-1 text-xs border border-orange-300 text-orange-600 rounded hover:bg-orange-50" title="取り下げ"><i class="fas fa-times"></i></button>` : ''}
+                        ${canDeleteApplicant || canDeleteAdmin ? `<button onclick="event.stopPropagation();doDeleteRequest('${r.id}')" class="px-2 py-1 text-xs border border-red-300 text-red-600 rounded hover:bg-red-50" title="削除"><i class="fas fa-trash"></i></button>` : ''}
+                      </div>
+                    ` : '<span class="text-gray-300">-</span>'}
+                  </td>
+                </tr>`;
+              }).join('')}
             </tbody>
           </table>
         </div>
@@ -1448,7 +1464,11 @@ async function doDeleteRequest(requestId) {
     try {
       await api(`/requests/${requestId}/delete`, { method: 'POST' });
       showToast('申請を削除しました');
-      navigate('requests');
+      if (state.currentPage === 'requests') {
+        renderPageContent();
+      } else {
+        navigate('requests');
+      }
     } catch (err) { showToast(err.message, 'error'); }
   });
 }
