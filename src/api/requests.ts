@@ -123,7 +123,7 @@ requestRoutes.post('/', async (c) => {
   if (!user) return c.json({ error: '認証が必要です' }, 401)
 
   const body = await c.req.json()
-  const { type, title, client_name, amount_with_tax: inputAmountWithTax, tax_rate, remarks } = body
+  const { type, title, client_name, amount_with_tax: inputAmountWithTax, tax_rate, remarks, gross_profit_rate } = body
 
   // Validation
   if (!type || !['estimate', 'invoice'].includes(type)) {
@@ -178,11 +178,17 @@ requestRoutes.post('/', async (c) => {
 
   const requestId = generateId()
 
+  // Validate gross_profit_rate (optional, 0-100)
+  const profitRate = gross_profit_rate !== undefined && gross_profit_rate !== null && gross_profit_rate !== '' ? parseFloat(gross_profit_rate) : null
+  if (profitRate !== null && (isNaN(profitRate) || profitRate < 0 || profitRate > 100)) {
+    return c.json({ error: '粗利率は0〜100の範囲で入力してください' }, 400)
+  }
+
   // Insert request
   await c.env.DB.prepare(
-    `INSERT INTO requests (id, request_number, type, applicant_id, title, client_name, amount, tax_rate, amount_with_tax, remarks, status, current_step, version)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 1, 1)`
-  ).bind(requestId, requestNumber, type, user.userId, title, client_name, amount, tax_rate, amount_with_tax, remarks || null).run()
+    `INSERT INTO requests (id, request_number, type, applicant_id, title, client_name, amount, tax_rate, amount_with_tax, remarks, gross_profit_rate, status, current_step, version)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 1, 1)`
+  ).bind(requestId, requestNumber, type, user.userId, title, client_name, amount, tax_rate, amount_with_tax, remarks || null, profitRate).run()
 
   // Create approval steps
   let stepOrder = 1
@@ -311,7 +317,7 @@ requestRoutes.post('/:id/resubmit', async (c) => {
   }
 
   const body = await c.req.json()
-  const { type, title, client_name, amount_with_tax, tax_rate, remarks } = body
+  const { type, title, client_name, amount_with_tax, tax_rate, remarks, gross_profit_rate } = body
 
   // Validation (same as create)
   if (!type || !['estimate', 'invoice'].includes(type)) return c.json({ error: '申請種別を選択してください' }, 400)
@@ -325,12 +331,18 @@ requestRoutes.post('/:id/resubmit', async (c) => {
   const amount = tax_rate > 0 ? Math.round(computedAmountWithTax / (1 + tax_rate)) : computedAmountWithTax
   const newVersion = (request.version as number) + 1
 
+  // Validate gross_profit_rate (optional, 0-100)
+  const profitRate = gross_profit_rate !== undefined && gross_profit_rate !== null && gross_profit_rate !== '' ? parseFloat(gross_profit_rate) : null
+  if (profitRate !== null && (isNaN(profitRate) || profitRate < 0 || profitRate > 100)) {
+    return c.json({ error: '粗利率は0〜100の範囲で入力してください' }, 400)
+  }
+
   // Update request
   await c.env.DB.prepare(
-    `UPDATE requests SET type=?, title=?, client_name=?, amount=?, tax_rate=?, amount_with_tax=?, remarks=?,
+    `UPDATE requests SET type=?, title=?, client_name=?, amount=?, tax_rate=?, amount_with_tax=?, remarks=?, gross_profit_rate=?,
      status='pending', current_step=1, version=?, updated_at=datetime('now')
      WHERE id = ?`
-  ).bind(type, title, client_name, amount, tax_rate, computedAmountWithTax, remarks || null, newVersion, id).run()
+  ).bind(type, title, client_name, amount, tax_rate, computedAmountWithTax, remarks || null, profitRate, newVersion, id).run()
 
   // Create new approval steps with new version
   const approvers = await c.env.DB.prepare(

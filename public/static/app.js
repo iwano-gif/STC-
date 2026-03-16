@@ -584,6 +584,22 @@ function renderNewRequest(main) {
             </div>
           </div>
         </div>
+
+        <!-- 粗利率入力 -->
+        <div class="bg-emerald-50 border border-emerald-200 rounded-lg p-4">
+          <label class="block text-sm font-medium text-emerald-800 mb-1">
+            <i class="fas fa-percentage text-emerald-600 mr-1"></i>粗利率（税抜ベース）
+          </label>
+          <p class="text-xs text-emerald-600 mb-2">想定する粗利率を入力してください（任意）</p>
+          <div class="flex items-center gap-3">
+            <div class="relative flex-1" style="max-width:160px">
+              <input type="number" id="req-profit-rate" min="0" max="100" step="0.1" class="w-full px-3 py-2 border border-emerald-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500" placeholder="例: 20" oninput="calcProfitPreview()">
+              <span class="absolute right-3 top-2 text-gray-500 text-sm">%</span>
+            </div>
+            <div id="req-profit-preview" class="text-sm text-emerald-700"></div>
+          </div>
+        </div>
+
         <div>
           <label class="block text-sm font-medium text-gray-700 mb-1">備考</label>
           <textarea id="req-remarks" rows="3" maxlength="1000" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500" placeholder="備考があれば入力してください"></textarea>
@@ -624,13 +640,15 @@ function renderNewRequest(main) {
     
     try {
       // 1. Create the request (send tax-inclusive amount)
+      const profitRateInput = document.getElementById('req-profit-rate').value;
       const body = {
         type: document.getElementById('req-type').value,
         title: document.getElementById('req-title').value,
         client_name: document.getElementById('req-client').value,
         amount_with_tax: parseFloat(document.getElementById('req-amount').value),
         tax_rate: parseFloat(document.getElementById('req-tax').value),
-        remarks: document.getElementById('req-remarks').value
+        remarks: document.getElementById('req-remarks').value,
+        gross_profit_rate: profitRateInput !== '' ? parseFloat(profitRateInput) : null
       };
       const res = await api('/requests', { method: 'POST', body: JSON.stringify(body) });
       
@@ -780,6 +798,24 @@ function calcTaxFromInc() {
   if (elTotal) elTotal.textContent = formatCurrency(amountWithTax);
   if (elExcl) elExcl.textContent = formatCurrency(amountExclTax);
   if (elTaxAmt) elTaxAmt.textContent = formatCurrency(taxAmount);
+  calcProfitPreview();
+}
+
+// 粗利プレビュー計算（新規申請）
+function calcProfitPreview() {
+  const amountWithTax = parseFloat(document.getElementById('req-amount')?.value || '0');
+  const rate = parseFloat(document.getElementById('req-tax')?.value || '0.10');
+  const amountExclTax = rate > 0 ? Math.round(amountWithTax / (1 + rate)) : amountWithTax;
+  const profitRateVal = parseFloat(document.getElementById('req-profit-rate')?.value || '');
+  const previewEl = document.getElementById('req-profit-preview');
+  if (!previewEl) return;
+  if (isNaN(profitRateVal) || profitRateVal <= 0 || amountExclTax <= 0) {
+    previewEl.textContent = '';
+    return;
+  }
+  const profitAmount = Math.round(amountExclTax * profitRateVal / 100);
+  const costAmount = amountExclTax - profitAmount;
+  previewEl.innerHTML = '<span class="text-emerald-600">粗利 ' + formatCurrency(profitAmount) + '</span><span class="text-gray-400 mx-1">|</span><span class="text-gray-600">原価 ' + formatCurrency(costAmount) + '</span>';
 }
 
 // PDF auto-fill: parse PDF and populate form fields
@@ -1119,6 +1155,7 @@ async function renderRequestDetail(main) {
         <div><span class="text-gray-500">税率</span><p class="font-medium">${req.tax_rate * 100}%</p></div>
         <div><span class="text-gray-500">税抜金額</span><p class="font-medium">${formatCurrency(req.amount)}</p></div>
         <div><span class="text-gray-500">申請日</span><p class="font-medium">${formatDate(req.created_at)}</p></div>
+        ${req.gross_profit_rate != null ? `<div><span class="text-gray-500">粗利率（税抜ベース）</span><p class="font-medium"><span class="inline-flex items-center px-2 py-0.5 rounded text-sm font-medium bg-emerald-100 text-emerald-800"><i class="fas fa-percentage mr-1 text-xs"></i>${req.gross_profit_rate}%</span></p></div>` : ''}
         ${req.remarks ? `<div class="sm:col-span-2"><span class="text-gray-500">備考</span><p class="font-medium whitespace-pre-wrap">${req.remarks}</p></div>` : ''}
       </div>
     </div>
@@ -1602,6 +1639,22 @@ async function renderEditRequest(main) {
             </div>
           </div>
         </div>
+
+        <!-- 粗利率入力 -->
+        <div class="bg-emerald-50 border border-emerald-200 rounded-lg p-4">
+          <label class="block text-sm font-medium text-emerald-800 mb-1">
+            <i class="fas fa-percentage text-emerald-600 mr-1"></i>粗利率（税抜ベース）
+          </label>
+          <p class="text-xs text-emerald-600 mb-2">想定する粗利率を入力してください（任意）</p>
+          <div class="flex items-center gap-3">
+            <div class="relative flex-1" style="max-width:160px">
+              <input type="number" id="edit-profit-rate" min="0" max="100" step="0.1" value="${req.gross_profit_rate != null ? req.gross_profit_rate : ''}" class="w-full px-3 py-2 border border-emerald-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500" placeholder="例: 20" oninput="calcProfitPreviewEdit()">
+              <span class="absolute right-3 top-2 text-gray-500 text-sm">%</span>
+            </div>
+            <div id="edit-profit-preview" class="text-sm text-emerald-700"></div>
+          </div>
+        </div>
+
         <div>
           <label class="block text-sm font-medium text-gray-700 mb-1">備考</label>
           <textarea id="edit-remarks" rows="3" maxlength="1000" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">${req.remarks || ''}</textarea>
@@ -1704,13 +1757,15 @@ async function renderEditRequest(main) {
       }
       
       // 1. Resubmit the request
+      const editProfitRateInput = document.getElementById('edit-profit-rate').value;
       const body = {
         type: document.getElementById('edit-type').value,
         title: document.getElementById('edit-title').value,
         client_name: document.getElementById('edit-client').value,
         amount_with_tax: parseFloat(document.getElementById('edit-amount').value),
         tax_rate: parseFloat(document.getElementById('edit-tax').value),
-        remarks: document.getElementById('edit-remarks').value
+        remarks: document.getElementById('edit-remarks').value,
+        gross_profit_rate: editProfitRateInput !== '' ? parseFloat(editProfitRateInput) : null
       };
       await api(`/requests/${id}/resubmit`, { method: 'POST', body: JSON.stringify(body) });
       
@@ -1755,6 +1810,24 @@ function calcTaxEditFromInc() {
   if (el) el.textContent = formatCurrency(amountWithTax);
   if (elExcl) elExcl.textContent = formatCurrency(amountExclTax);
   if (elTaxAmt) elTaxAmt.textContent = formatCurrency(taxAmount);
+  calcProfitPreviewEdit();
+}
+
+// 粗利プレビュー計算（編集・再申請）
+function calcProfitPreviewEdit() {
+  const amountWithTax = parseFloat(document.getElementById('edit-amount')?.value || '0');
+  const rate = parseFloat(document.getElementById('edit-tax')?.value || '0.10');
+  const amountExclTax = rate > 0 ? Math.round(amountWithTax / (1 + rate)) : amountWithTax;
+  const profitRateVal = parseFloat(document.getElementById('edit-profit-rate')?.value || '');
+  const previewEl = document.getElementById('edit-profit-preview');
+  if (!previewEl) return;
+  if (isNaN(profitRateVal) || profitRateVal <= 0 || amountExclTax <= 0) {
+    previewEl.textContent = '';
+    return;
+  }
+  const profitAmount = Math.round(amountExclTax * profitRateVal / 100);
+  const costAmount = amountExclTax - profitAmount;
+  previewEl.innerHTML = '<span class="text-emerald-600">粗利 ' + formatCurrency(profitAmount) + '</span><span class="text-gray-400 mx-1">|</span><span class="text-gray-600">原価 ' + formatCurrency(costAmount) + '</span>';
 }
 
 // ============================================================
@@ -2334,7 +2407,7 @@ async function renderDealList(main) {
                   <td class="px-4 py-3 text-gray-600 max-w-[150px] truncate">${d.client_name}</td>
                   <td class="px-4 py-3 text-right">${formatCurrency(d.amount_with_tax)}</td>
                   <td class="px-4 py-3 text-right">${d.contract_amount_excl_tax ? `<span class="font-medium">${formatCurrency(d.contract_amount_excl_tax)}</span>` : (d.contract_amount ? `<span class="font-medium">${formatCurrency(d.contract_amount)}<sup class="text-[9px] text-gray-400 ml-0.5">税込</sup></span>` : '-')}</td>
-                  <td class="px-4 py-3 text-right">${profitRate !== null ? `<span class="${profitRate >= 20 ? 'text-emerald-600' : profitRate >= 10 ? 'text-yellow-600' : 'text-red-600'} font-medium">${profitRate}%</span>` : '<span class="text-gray-300">-</span>'}</td>
+                  <td class="px-4 py-3 text-right">${profitRate !== null ? `<span class="${profitRate >= 20 ? 'text-emerald-600' : profitRate >= 10 ? 'text-yellow-600' : 'text-red-600'} font-medium">${profitRate}%</span>` : (d.gross_profit_rate != null ? `<span class="text-emerald-500" title="申請時の想定粗利率">${d.gross_profit_rate}%<sup class="text-[9px] text-gray-400 ml-0.5">申請</sup></span>` : '<span class="text-gray-300">-</span>')}</td>
                   <td class="px-4 py-3 text-center">${dealStatusBadge(d.deal_status)}</td>
                   <td class="px-4 py-3 text-right text-xs">${payPct !== null ? `<div class="flex items-center gap-1 justify-end"><div class="w-12 bg-gray-200 rounded-full h-2"><div class="bg-green-500 rounded-full h-2" style="width:${payPct}%"></div></div><span class="text-gray-600">${payPct}%</span></div>` : '<span class="text-gray-300">-</span>'}</td>
                 </tr>`;
@@ -2403,6 +2476,7 @@ async function renderDealListApprover(main) {
                     <span><i class="fas fa-building text-gray-400 mr-1"></i>${d.client_name}</span>
                     <span><i class="fas fa-yen-sign text-gray-400 mr-1"></i>${formatCurrency(d.amount_with_tax)}<span class="text-[10px] text-gray-400 ml-0.5">税込</span></span>
                     <span><i class="fas fa-user text-gray-400 mr-1"></i>${d.applicant_name}</span>
+                    ${d.gross_profit_rate != null ? `<span class="inline-flex items-center px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 text-xs font-medium"><i class="fas fa-percentage mr-0.5 text-[10px]"></i>粗利 ${d.gross_profit_rate}%</span>` : ''}
                   </div>
                 </div>
                 <div class="flex flex-col gap-2 flex-shrink-0">
@@ -2596,6 +2670,7 @@ async function renderDealDetail(main) {
           <p class="font-medium text-gray-500">${formatCurrency(d.amount_with_tax)}</p>
         </div>
         <div><span class="text-gray-500">見積日</span><p class="font-medium">${formatDate(d.request_date)}</p></div>
+        ${d.gross_profit_rate != null ? `<div><span class="text-gray-500">申請時粗利率</span><p class="font-medium"><span class="inline-flex items-center px-2 py-0.5 rounded text-sm font-medium bg-emerald-100 text-emerald-800"><i class="fas fa-percentage mr-1 text-xs"></i>${d.gross_profit_rate}%</span></p></div>` : ''}
         ${d.remarks ? `<div class="sm:col-span-2"><span class="text-gray-500">備考</span><p class="font-medium">${d.remarks}</p></div>` : ''}
       </div>
     </div>
@@ -2940,6 +3015,7 @@ function renderDealDetailReadonly(main, d, payments) {
     + '<div><span class="text-gray-400 text-xs">申請者</span><p class="font-medium text-gray-900">' + d.applicant_name + '</p></div>'
     + '<div><span class="text-gray-400 text-xs">見積金額（税込）</span><p class="font-bold text-lg text-gray-900">' + formatCurrency(d.amount_with_tax) + '</p></div>'
     + '<div><span class="text-gray-400 text-xs">見積金額（税抜）</span><p class="font-medium text-gray-500">' + formatCurrency(d.amount) + '</p></div>'
+    + (d.gross_profit_rate != null ? '<div><span class="text-gray-400 text-xs">申請時粗利率</span><p class="font-medium"><span class="inline-flex items-center px-2 py-0.5 rounded text-sm font-medium bg-emerald-100 text-emerald-800"><i class="fas fa-percentage mr-1 text-xs"></i>' + d.gross_profit_rate + '%</span></p></div>' : '')
     + (d.remarks ? '<div class="sm:col-span-2"><span class="text-gray-400 text-xs">備考</span><p class="font-medium text-gray-700">' + d.remarks + '</p></div>' : '')
     + '</div></div>'
 

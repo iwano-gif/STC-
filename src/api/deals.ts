@@ -48,7 +48,7 @@ dealRoutes.get('/', async (c) => {
 
   const deals = await c.env.DB.prepare(
     `SELECT d.*, r.request_number, r.type, r.title, r.client_name,
-            r.amount, r.tax_rate, r.amount_with_tax, r.created_at as request_date,
+            r.amount, r.tax_rate, r.amount_with_tax, r.gross_profit_rate, r.created_at as request_date,
             p.display_name as applicant_name
      FROM deal_tracking d
      JOIN requests r ON d.request_id = r.id
@@ -81,7 +81,7 @@ dealRoutes.get('/:id', async (c) => {
   const id = c.req.param('id')
   const deal = await c.env.DB.prepare(
     `SELECT d.*, r.request_number, r.type, r.title, r.client_name,
-            r.amount, r.tax_rate, r.amount_with_tax, r.created_at as request_date, r.remarks,
+            r.amount, r.tax_rate, r.amount_with_tax, r.gross_profit_rate, r.created_at as request_date, r.remarks,
             p.display_name as applicant_name
      FROM deal_tracking d
      JOIN requests r ON d.request_id = r.id
