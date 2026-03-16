@@ -241,6 +241,61 @@ requestRoutes.post('/:id/withdraw', async (c) => {
   return c.json({ message: '申請を取り下げました' })
 })
 
+// 申請削除
+requestRoutes.post('/:id/delete', async (c) => {
+  const user = await getUser(c)
+  if (!user) return c.json({ error: '認証が必要です' }, 401)
+
+  const id = c.req.param('id')
+  const isAdmin = hasRole(user.role, 'admin')
+
+  const request = await c.env.DB.prepare(
+    'SELECT * FROM requests WHERE id = ?'
+  ).bind(id).first()
+
+  if (!request) {
+    return c.json({ error: '申請が見つかりません' }, 404)
+  }
+
+  const isApplicant = request.applicant_id === user.userId
+
+  // 権限チェック: 申請者本人 or 管理者のみ
+  if (!isApplicant && !isAdmin) {
+    return c.json({ error: '削除権限がありません' }, 403)
+  }
+
+  // 申請者本人は承認中（pending）の場合削除不可（取り下げを使う）
+  // ただし管理者はどのステータスでも削除可能
+  if (isApplicant && !isAdmin && request.status === 'pending') {
+    return c.json({ error: '承認中の申請は取り下げを行ってください' }, 400)
+  }
+
+  // 申請者本人が削除できるステータス: withdrawn, rejected, completed, processed
+  // 管理者は全てのステータスで削除可能
+  const applicantDeletable = ['withdrawn', 'rejected', 'completed', 'processed']
+  if (isApplicant && !isAdmin && !applicantDeletable.includes(request.status as string)) {
+    return c.json({ error: 'この申請は削除できません' }, 400)
+  }
+
+  // 関連データを全て削除
+  await c.env.DB.prepare('DELETE FROM request_files WHERE request_id = ?').bind(id).run()
+  await c.env.DB.prepare('DELETE FROM approval_steps WHERE request_id = ?').bind(id).run()
+  await c.env.DB.prepare('DELETE FROM requests WHERE id = ?').bind(id).run()
+
+  // 監査ログ
+  await c.env.DB.prepare(
+    `INSERT INTO audit_logs (id, user_id, action, target_table, target_id, detail)
+     VALUES (?, ?, 'request_deleted', 'requests', ?, ?)`
+  ).bind(generateId(), user.userId, id, JSON.stringify({
+    request_number: request.request_number,
+    title: request.title,
+    status: request.status,
+    deleted_by: isAdmin && !isApplicant ? 'admin' : 'applicant'
+  })).run()
+
+  return c.json({ message: '申請を削除しました' })
+})
+
 // 再申請
 requestRoutes.post('/:id/resubmit', async (c) => {
   const user = await getUser(c)

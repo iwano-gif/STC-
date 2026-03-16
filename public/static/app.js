@@ -1187,15 +1187,36 @@ async function renderRequestDetail(main) {
     <!-- Applicant Actions -->
     ${isApplicant && req.status === 'pending' ? `
     <div class="bg-white border border-gray-200 rounded-lg p-5 mb-4">
-      <button onclick="doWithdraw('${req.id}')" class="px-4 py-2 text-sm border border-red-300 text-red-600 rounded-lg hover:bg-red-50">
-        <i class="fas fa-times mr-1"></i>この申請を取り下げる
-      </button>
+      <div class="flex gap-3">
+        <button onclick="doWithdraw('${req.id}')" class="px-4 py-2 text-sm border border-red-300 text-red-600 rounded-lg hover:bg-red-50">
+          <i class="fas fa-times mr-1"></i>この申請を取り下げる
+        </button>
+      </div>
     </div>` : ''}
     
     ${isApplicant && req.status === 'rejected' ? `
     <div class="bg-white border border-orange-200 rounded-lg p-5 mb-4">
-      <button onclick="navigate('edit-request',{id:'${req.id}'})" class="px-4 py-2 text-sm bg-orange-500 text-white rounded-lg hover:bg-orange-600">
-        <i class="fas fa-edit mr-1"></i>修正して再申請
+      <div class="flex gap-3 flex-wrap">
+        <button onclick="navigate('edit-request',{id:'${req.id}'})" class="px-4 py-2 text-sm bg-orange-500 text-white rounded-lg hover:bg-orange-600">
+          <i class="fas fa-edit mr-1"></i>修正して再申請
+        </button>
+        <button onclick="doDeleteRequest('${req.id}')" class="px-4 py-2 text-sm border border-red-300 text-red-600 rounded-lg hover:bg-red-50">
+          <i class="fas fa-trash mr-1"></i>この申請を削除
+        </button>
+      </div>
+    </div>` : ''}
+
+    ${isApplicant && ['withdrawn', 'completed', 'processed'].includes(req.status) ? `
+    <div class="bg-white border border-gray-200 rounded-lg p-5 mb-4">
+      <button onclick="doDeleteRequest('${req.id}')" class="px-4 py-2 text-sm border border-red-300 text-red-600 rounded-lg hover:bg-red-50">
+        <i class="fas fa-trash mr-1"></i>この申請を削除
+      </button>
+    </div>` : ''}
+
+    ${isAdmin && !isApplicant ? `
+    <div class="bg-white border border-gray-200 rounded-lg p-5 mb-4">
+      <button onclick="doDeleteRequest('${req.id}')" class="px-4 py-2 text-sm border border-red-300 text-red-600 rounded-lg hover:bg-red-50">
+        <i class="fas fa-trash mr-1"></i>この申請を削除（管理者）
       </button>
     </div>` : ''}
     
@@ -1418,6 +1439,16 @@ async function doWithdraw(requestId) {
       await api(`/requests/${requestId}/withdraw`, { method: 'POST' });
       showToast('申請を取り下げました');
       renderPageContent();
+    } catch (err) { showToast(err.message, 'error'); }
+  });
+}
+
+async function doDeleteRequest(requestId) {
+  showConfirm('この申請を完全に削除しますか？\n削除後は復元できません。', async () => {
+    try {
+      await api(`/requests/${requestId}/delete`, { method: 'POST' });
+      showToast('申請を削除しました');
+      navigate('requests');
     } catch (err) { showToast(err.message, 'error'); }
   });
 }
@@ -2091,7 +2122,7 @@ async function renderAuditLogs(main) {
   const data = await api(`/admin/audit-logs?${params}`);
   
   const actionLabels = {
-    request_created: '申請作成', request_resubmitted: '再申請', request_withdrawn: '取下げ',
+    request_created: '申請作成', request_resubmitted: '再申請', request_withdrawn: '取下げ', request_deleted: '申請削除',
     step_approved: '承認', step_rejected: '差戻し', step_reassigned: '承認者振替',
     request_processed: '処理済み', user_invited: 'ユーザー招待', user_role_changed: 'ロール変更',
     user_deactivated: 'ユーザー無効化', user_reactivated: 'ユーザー有効化', user_deleted: 'ユーザー削除',
