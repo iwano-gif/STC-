@@ -325,6 +325,60 @@ dealRoutes.post('/:id/confirm-contract', async (c) => {
   return c.json({ message: '工事決定を確定しました' })
 })
 
+// ====== 見積もりから直接工事決定（トラッキング未登録の承認済み見積もりを一括処理） ======
+dealRoutes.post('/confirm-from-estimate/:requestId', async (c) => {
+  const user = await getAdminOrApprover(c)
+  if (!user) return c.json({ error: '権限が必要です' }, 403)
+
+  const requestId = c.req.param('requestId')
+
+  // 承認済み見積もりか確認
+  const request = await c.env.DB.prepare(
+    "SELECT * FROM requests WHERE id = ? AND type = 'estimate' AND status IN ('completed','processed')"
+  ).bind(requestId).first()
+  if (!request) return c.json({ error: '承認済みの見積もり申請が見つかりません' }, 404)
+
+  // 既にトラッキング済みか確認
+  const existing = await c.env.DB.prepare(
+    'SELECT id, deal_status FROM deal_tracking WHERE request_id = ?'
+  ).bind(requestId).first()
+
+  if (existing) {
+    if (existing.deal_status === 'estimate_approved') {
+      // トラッキング済みだがまだ estimate_approved → contracted に変更
+      await c.env.DB.prepare(
+        `UPDATE deal_tracking SET deal_status = 'contracted', updated_at = datetime('now') WHERE id = ?`
+      ).bind(existing.id).run()
+      await c.env.DB.prepare(
+        `INSERT INTO audit_logs (id, user_id, action, target_table, target_id, detail)
+         VALUES (?, ?, 'deal_contract_confirmed', 'deal_tracking', ?, ?)`
+      ).bind(generateId(), user.userId, existing.id, JSON.stringify({
+        confirmed_by: user.displayName || user.userId,
+        old_status: 'estimate_approved', new_status: 'contracted'
+      })).run()
+      return c.json({ id: existing.id, message: '工事決定を確定しました' })
+    }
+    return c.json({ error: 'この案件は既に工事決定済みまたは別のステータスです' }, 400)
+  }
+
+  // 未トラッキング → 新規作成して即 contracted に
+  const id = generateId()
+  await c.env.DB.prepare(
+    `INSERT INTO deal_tracking (id, request_id, deal_status) VALUES (?, ?, 'contracted')`
+  ).bind(id, requestId).run()
+
+  await c.env.DB.prepare(
+    `INSERT INTO audit_logs (id, user_id, action, target_table, target_id, detail)
+     VALUES (?, ?, 'deal_confirmed_from_estimate', 'deal_tracking', ?, ?)`
+  ).bind(generateId(), user.userId, id, JSON.stringify({
+    request_id: requestId,
+    confirmed_by: user.displayName || user.userId,
+    status: 'contracted'
+  })).run()
+
+  return c.json({ id, message: '工事決定を確定しました' })
+})
+
 // ====== ダッシュボード集計（管理者・承認者） ======
 dealRoutes.get('/dashboard/summary', async (c) => {
   const user = await getAdminOrApprover(c)
