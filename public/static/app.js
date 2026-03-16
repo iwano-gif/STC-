@@ -2159,6 +2159,7 @@ async function renderAuditLogs(main) {
   const actionLabels = {
     request_created: '申請作成', request_resubmitted: '再申請', request_withdrawn: '取下げ', request_deleted: '申請削除',
     deal_created: '案件登録', deal_updated: '案件更新', deal_deleted: '案件削除',
+    payment_added: '入金追加', payment_updated: '入金更新', payment_deleted: '入金削除',
     step_approved: '承認', step_rejected: '差戻し', step_reassigned: '承認者振替',
     request_processed: '処理済み', user_invited: 'ユーザー招待', user_role_changed: 'ロール変更',
     user_deactivated: 'ユーザー無効化', user_reactivated: 'ユーザー有効化', user_deleted: 'ユーザー削除',
@@ -2300,22 +2301,30 @@ async function renderDealList(main) {
                 <th class="px-4 py-3 text-left font-medium text-gray-500">取引先</th>
                 <th class="px-4 py-3 text-right font-medium text-gray-500">見積金額</th>
                 <th class="px-4 py-3 text-right font-medium text-gray-500">契約金額</th>
+                <th class="px-4 py-3 text-right font-medium text-gray-500">粗利率</th>
                 <th class="px-4 py-3 text-center font-medium text-gray-500">ステータス</th>
-                <th class="px-4 py-3 text-left font-medium text-gray-500">入金期限</th>
+                <th class="px-4 py-3 text-right font-medium text-gray-500">入金状況</th>
               </tr>
             </thead>
             <tbody class="divide-y divide-gray-100">
-              ${data.deals.map(d => `
+              ${data.deals.map(d => {
+                const base = d.contract_amount || d.amount_with_tax || 0;
+                const cost = d.cost_amount || 0;
+                const profitRate = (cost && base) ? Math.round((base - cost) / base * 100) : null;
+                const pm = data.paymentsMap?.[d.id] || { received: 0, expected: 0 };
+                const payPct = pm.expected > 0 ? Math.round(pm.received / pm.expected * 100) : null;
+                return `
                 <tr class="hover:bg-gray-50 cursor-pointer" onclick="navigate('admin-deal-detail',{id:'${d.id}'})">
                   <td class="px-4 py-3 font-mono text-gray-500">${String(d.request_number).padStart(4,'0')}</td>
                   <td class="px-4 py-3 font-medium max-w-[200px] truncate">${d.title}</td>
                   <td class="px-4 py-3 text-gray-600 max-w-[150px] truncate">${d.client_name}</td>
                   <td class="px-4 py-3 text-right">${formatCurrency(d.amount_with_tax)}</td>
                   <td class="px-4 py-3 text-right font-medium">${d.contract_amount ? formatCurrency(d.contract_amount) : '-'}</td>
+                  <td class="px-4 py-3 text-right">${profitRate !== null ? `<span class="${profitRate >= 20 ? 'text-emerald-600' : profitRate >= 10 ? 'text-yellow-600' : 'text-red-600'} font-medium">${profitRate}%</span>` : '<span class="text-gray-300">-</span>'}</td>
                   <td class="px-4 py-3 text-center">${dealStatusBadge(d.deal_status)}</td>
-                  <td class="px-4 py-3 text-gray-500 text-xs">${d.payment_due_date || '-'}</td>
-                </tr>
-              `).join('')}
+                  <td class="px-4 py-3 text-right text-xs">${payPct !== null ? `<div class="flex items-center gap-1 justify-end"><div class="w-12 bg-gray-200 rounded-full h-2"><div class="bg-green-500 rounded-full h-2" style="width:${payPct}%"></div></div><span class="text-gray-600">${payPct}%</span></div>` : '<span class="text-gray-300">-</span>'}</td>
+                </tr>`;
+              }).join('')}
             </tbody>
           </table>
         </div>
@@ -2339,12 +2348,90 @@ async function startTracking(requestId) {
 }
 
 // ====== 案件詳細・編集 ======
+
+function renderPaymentCard(p, dealId) {
+  const typeLabels = { advance: '着手金', interim: '中間金', final: '完了金', other: 'その他' };
+  const typeColors = { advance: 'bg-blue-100 text-blue-700', interim: 'bg-yellow-100 text-yellow-700', final: 'bg-green-100 text-green-700', other: 'bg-gray-100 text-gray-600' };
+  const isPaid = !!p.actual_date;
+  const borderClass = isPaid ? 'border-green-200 bg-green-50/50' : 'border-gray-200';
+  const paidBadge = isPaid ? '<span class="text-xs text-green-600 font-medium"><i class="fas fa-check-circle mr-0.5"></i>入金済</span>' : '';
+  const amtClass = isPaid ? 'text-green-700' : '';
+  const invoiceLine = p.invoice_date ? '<div class="text-xs text-gray-400 mt-1">請求日: ' + p.invoice_date + '</div>' : '';
+  const notesLine = p.notes ? '<div class="text-xs text-gray-500 mt-1 italic">' + p.notes + '</div>' : '';
+
+  return '<div class="border ' + borderClass + ' rounded-lg p-4">'
+    + '<div class="flex items-center justify-between mb-2">'
+    + '<div class="flex items-center gap-2">'
+    + '<span class="badge ' + (typeColors[p.payment_type] || 'bg-gray-100 text-gray-600') + ' text-xs">' + (typeLabels[p.payment_type] || p.payment_type) + '</span>'
+    + '<span class="font-medium text-sm">' + p.label + '</span>'
+    + paidBadge
+    + '</div>'
+    + '<div class="flex items-center gap-1">'
+    + '<button type="button" onclick="showEditPaymentModal(\'' + dealId + '\', \'' + p.id + '\')" class="px-2 py-1 text-xs text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded" title="編集"><i class="fas fa-pen"></i></button>'
+    + '<button type="button" onclick="deletePayment(\'' + dealId + '\', \'' + p.id + '\', \'' + p.label + '\')" class="px-2 py-1 text-xs text-gray-500 hover:text-red-600 hover:bg-red-50 rounded" title="削除"><i class="fas fa-trash"></i></button>'
+    + '</div></div>'
+    + '<div class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">'
+    + '<div><span class="text-gray-400">請求予定額</span><p class="font-medium">' + (p.expected_amount ? formatCurrency(p.expected_amount) : '-') + '</p></div>'
+    + '<div><span class="text-gray-400">入金予定日</span><p class="font-medium">' + (p.expected_date || '-') + '</p></div>'
+    + '<div><span class="text-gray-400">入金額</span><p class="font-medium ' + amtClass + '">' + (p.actual_amount ? formatCurrency(p.actual_amount) : '-') + '</p></div>'
+    + '<div><span class="text-gray-400">入金日</span><p class="font-medium ' + amtClass + '">' + (p.actual_date || '-') + '</p></div>'
+    + '</div>'
+    + invoiceLine + notesLine
+    + '</div>';
+}
+
+function renderPaymentsSection(payments, dealId) {
+  if (!payments || payments.length === 0) {
+    return '<div class="text-center py-8 text-gray-400">'
+      + '<i class="fas fa-coins text-3xl mb-2"></i>'
+      + '<p class="text-sm">入金情報が登録されていません</p>'
+      + '<p class="text-xs mt-1">「入金追加」ボタンで着手金・中間金・完了金を登録してください</p>'
+      + '</div>';
+  }
+
+  const totalExpected = payments.reduce((s,p) => s + (p.expected_amount || 0), 0);
+  const totalReceived = payments.reduce((s,p) => s + (p.actual_amount || 0), 0);
+  const remaining = totalExpected - totalReceived;
+  const pct = totalExpected > 0 ? Math.round(totalReceived / totalExpected * 100) : 0;
+
+  return '<div class="space-y-3" id="payments-list">'
+    + payments.map(p => renderPaymentCard(p, dealId)).join('')
+    + '</div>'
+    + '<div class="mt-4 p-3 bg-purple-50 rounded-lg border border-purple-100">'
+    + '<div class="flex items-center justify-between text-sm flex-wrap gap-2">'
+    + '<span class="text-purple-700 font-medium">入金サマリー</span>'
+    + '<div class="flex gap-4 text-xs flex-wrap">'
+    + '<span class="text-gray-500">請求予定計: <strong>' + formatCurrency(totalExpected) + '</strong></span>'
+    + '<span class="text-green-700">入金済計: <strong>' + formatCurrency(totalReceived) + '</strong></span>'
+    + '<span class="text-orange-600">残額: <strong>' + formatCurrency(remaining) + '</strong></span>'
+    + '</div></div>'
+    + '<div class="mt-2 bg-gray-200 rounded-full h-3 overflow-hidden">'
+    + '<div class="bg-green-500 h-3 transition-all" style="width:' + pct + '%"></div>'
+    + '</div></div>';
+}
+
+function renderProfitBar(base, cost) {
+  if (!cost || !base) return '';
+  const profitPct = Math.max(0, Math.min(100, Math.round((base - cost) / base * 100)));
+  const costPct = 100 - profitPct;
+  return '<div class="text-xs text-gray-500 mb-1">契約額 ' + formatCurrency(base) + ' の内訳</div>'
+    + '<div class="flex rounded-full h-6 overflow-hidden bg-gray-200">'
+    + '<div class="bg-rose-400 flex items-center justify-center text-white text-xs font-medium" style="width:' + costPct + '%">原価 ' + costPct + '%</div>'
+    + '<div class="bg-emerald-500 flex items-center justify-center text-white text-xs font-medium" style="width:' + profitPct + '%">粗利 ' + profitPct + '%</div>'
+    + '</div>';
+}
+
 async function renderDealDetail(main) {
   const id = state.pageParams?.id;
   if (!id) { navigate('admin-deals'); return; }
 
   const data = await api(`/deals/${id}`);
   const d = data.deal;
+  const baseAmount = d.contract_amount || d.amount_with_tax || 0;
+  const costAmount = d.cost_amount || 0;
+  const profitAmount = baseAmount - costAmount;
+  const profitDisplay = costAmount ? formatCurrency(profitAmount) : '-';
+  const profitRateDisplay = d.profit_rate != null ? (Math.round(d.profit_rate * 100 * 100) / 100).toString() : '';
 
   main.innerHTML = `
     <div class="flex items-center gap-3 mb-4">
@@ -2367,10 +2454,9 @@ async function renderDealDetail(main) {
     </div>
 
     <!-- 案件進捗管理フォーム -->
-    <form id="deal-form" class="space-y-4">
+    <form id="deal-form" data-fallback-amt="${d.amount_with_tax || 0}" class="space-y-4">
       <div class="bg-white border border-gray-200 rounded-lg p-5">
         <h2 class="text-sm font-semibold text-gray-500 mb-4 uppercase tracking-wider">案件進捗</h2>
-        
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
             <label class="block text-sm font-medium text-gray-700 mb-1">ステータス</label>
@@ -2399,6 +2485,32 @@ async function renderDealDetail(main) {
         </div>
       </div>
 
+      <!-- 原価・利益率 -->
+      <div class="bg-white border border-gray-200 rounded-lg p-5">
+        <h2 class="text-sm font-semibold text-emerald-600 mb-4"><i class="fas fa-calculator mr-1"></i>原価・粗利</h2>
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">原価（税抜）</label>
+            <input type="number" id="deal-cost-amount" value="${d.cost_amount || ''}" 
+              class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" placeholder="0"
+              oninput="calcProfit()">
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">利益率（%）</label>
+            <input type="number" id="deal-profit-rate" value="${profitRateDisplay}" 
+              class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" placeholder="例: 30" step="0.01"
+              oninput="calcProfitFromRate()">
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">粗利額</label>
+            <div id="deal-profit-display" class="px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm font-bold text-emerald-700">
+              ${profitDisplay}
+            </div>
+          </div>
+        </div>
+        <div id="profit-summary-bar" class="mt-3">${renderProfitBar(baseAmount, costAmount)}</div>
+      </div>
+
       <div class="bg-white border border-gray-200 rounded-lg p-5">
         <h2 class="text-sm font-semibold text-yellow-600 mb-4"><i class="fas fa-hard-hat mr-1"></i>工事情報</h2>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -2413,30 +2525,15 @@ async function renderDealDetail(main) {
         </div>
       </div>
 
+      <!-- 分割入金管理 -->
       <div class="bg-white border border-gray-200 rounded-lg p-5">
-        <h2 class="text-sm font-semibold text-purple-600 mb-4"><i class="fas fa-file-invoice-dollar mr-1"></i>請求・入金情報</h2>
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1">請求日</label>
-            <input type="date" id="deal-invoice-date" value="${d.invoice_date || ''}" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
-          </div>
-          <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1">請求金額（税込）</label>
-            <input type="number" id="deal-invoice-amount" value="${d.invoice_amount || ''}" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" placeholder="0">
-          </div>
-          <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1">入金期限</label>
-            <input type="date" id="deal-payment-due" value="${d.payment_due_date || ''}" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
-          </div>
-          <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1">入金日</label>
-            <input type="date" id="deal-payment-date" value="${d.payment_date || ''}" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
-          </div>
-          <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1">入金額</label>
-            <input type="number" id="deal-payment-amount" value="${d.payment_amount || ''}" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" placeholder="0">
-          </div>
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-sm font-semibold text-purple-600"><i class="fas fa-coins mr-1"></i>分割入金管理</h2>
+          <button type="button" onclick="showAddPaymentModal('${d.id}')" class="px-3 py-1.5 text-xs bg-purple-600 text-white rounded-lg hover:bg-purple-700">
+            <i class="fas fa-plus mr-1"></i>入金追加
+          </button>
         </div>
+        ${renderPaymentsSection(data.payments, d.id)}
       </div>
 
       <div class="flex gap-3">
@@ -2452,26 +2549,177 @@ async function renderDealDetail(main) {
       </div>
     </form>`;
 
+  // 原価→粗利 自動計算
+  window.calcProfit = function() {
+    var fallbackAmt = parseFloat(document.getElementById('deal-form').dataset.fallbackAmt) || 0;
+    var base = parseFloat(document.getElementById('deal-contract-amount')?.value) || fallbackAmt;
+    var cost = parseFloat(document.getElementById('deal-cost-amount')?.value) || 0;
+    var profit = base - cost;
+    var rate = base > 0 ? (profit / base * 100) : 0;
+    document.getElementById('deal-profit-display').textContent = cost ? formatCurrency(profit) : '-';
+    document.getElementById('deal-profit-rate').value = cost ? rate.toFixed(2) : '';
+    updateProfitBar(base, cost);
+  };
+
+  // 利益率→原価 自動計算
+  window.calcProfitFromRate = function() {
+    var fallbackAmt = parseFloat(document.getElementById('deal-form').dataset.fallbackAmt) || 0;
+    var base = parseFloat(document.getElementById('deal-contract-amount')?.value) || fallbackAmt;
+    var rateStr = document.getElementById('deal-profit-rate')?.value;
+    if (!rateStr) { document.getElementById('deal-profit-display').textContent = '-'; return; }
+    var rate = parseFloat(rateStr);
+    var cost = base * (1 - rate / 100);
+    var profit = base - cost;
+    document.getElementById('deal-cost-amount').value = Math.round(cost);
+    document.getElementById('deal-profit-display').textContent = formatCurrency(Math.round(profit));
+    updateProfitBar(base, cost);
+  };
+
+  function updateProfitBar(base, cost) {
+    document.getElementById('profit-summary-bar').innerHTML = renderProfitBar(base, cost);
+  }
+
   document.getElementById('deal-form').onsubmit = async (e) => {
     e.preventDefault();
     try {
+      const costVal = document.getElementById('deal-cost-amount').value;
+      const rateVal = document.getElementById('deal-profit-rate').value;
       await api(`/deals/${id}/update`, { method: 'POST', body: JSON.stringify({
         deal_status: document.getElementById('deal-status').value,
         contract_date: document.getElementById('deal-contract-date').value || null,
         contract_amount: parseFloat(document.getElementById('deal-contract-amount').value) || null,
         construction_start: document.getElementById('deal-construction-start').value || null,
         construction_end: document.getElementById('deal-construction-end').value || null,
-        invoice_date: document.getElementById('deal-invoice-date').value || null,
-        invoice_amount: parseFloat(document.getElementById('deal-invoice-amount').value) || null,
-        payment_due_date: document.getElementById('deal-payment-due').value || null,
-        payment_date: document.getElementById('deal-payment-date').value || null,
-        payment_amount: parseFloat(document.getElementById('deal-payment-amount').value) || null,
+        cost_amount: costVal !== '' ? parseFloat(costVal) : null,
+        profit_rate: rateVal !== '' ? parseFloat(rateVal) / 100 : null,
         notes: document.getElementById('deal-notes').value || null
       })});
       showToast('案件情報を更新しました');
       renderPageContent();
     } catch (err) { showToast(err.message, 'error'); }
   };
+}
+
+// ====== 分割入金 モーダル・操作 ======
+function paymentFormHtml(prefix, p) {
+  // p is null for add, or existing payment for edit
+  const typeOpts = [
+    { value: 'advance', label: '着手金' },
+    { value: 'interim', label: '中間金' },
+    { value: 'final', label: '完了金（残金）' },
+    { value: 'other', label: 'その他' }
+  ];
+  var selOpts = typeOpts.map(function(o) {
+    var sel = (p && o.value === p.payment_type) ? ' selected' : '';
+    return '<option value="' + o.value + '"' + sel + '>' + o.label + '</option>';
+  }).join('');
+
+  return '<div class="space-y-3">'
+    + '<div class="grid grid-cols-2 gap-3">'
+    + '<div><label class="block text-xs font-medium text-gray-600 mb-1">入金種別' + (p ? '' : ' <span class="text-red-500">*</span>') + '</label>'
+    + '<select id="' + prefix + '-type" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">' + selOpts + '</select></div>'
+    + '<div><label class="block text-xs font-medium text-gray-600 mb-1">ラベル' + (p ? '' : ' <span class="text-red-500">*</span>') + '</label>'
+    + '<input type="text" id="' + prefix + '-label" value="' + (p ? p.label : '') + '" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" placeholder="例: 着手金 30%"></div>'
+    + '</div>'
+    + '<div class="grid grid-cols-2 gap-3">'
+    + '<div><label class="block text-xs font-medium text-gray-600 mb-1">請求予定額</label>'
+    + '<input type="number" id="' + prefix + '-expected-amount" value="' + (p && p.expected_amount ? p.expected_amount : '') + '" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" placeholder="0"></div>'
+    + '<div><label class="block text-xs font-medium text-gray-600 mb-1">入金予定日</label>'
+    + '<input type="date" id="' + prefix + '-expected-date" value="' + (p && p.expected_date ? p.expected_date : '') + '" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"></div>'
+    + '</div>'
+    + '<div class="grid grid-cols-2 gap-3">'
+    + '<div><label class="block text-xs font-medium text-gray-600 mb-1">請求日</label>'
+    + '<input type="date" id="' + prefix + '-invoice-date" value="' + (p && p.invoice_date ? p.invoice_date : '') + '" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"></div>'
+    + '<div></div>'
+    + '</div>'
+    + '<div class="grid grid-cols-2 gap-3">'
+    + '<div><label class="block text-xs font-medium text-gray-600 mb-1">実入金額</label>'
+    + '<input type="number" id="' + prefix + '-actual-amount" value="' + (p && p.actual_amount ? p.actual_amount : '') + '" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" placeholder="0"></div>'
+    + '<div><label class="block text-xs font-medium text-gray-600 mb-1">実入金日</label>'
+    + '<input type="date" id="' + prefix + '-actual-date" value="' + (p && p.actual_date ? p.actual_date : '') + '" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"></div>'
+    + '</div>'
+    + '<div><label class="block text-xs font-medium text-gray-600 mb-1">備考</label>'
+    + '<input type="text" id="' + prefix + '-notes" value="' + (p && p.notes ? p.notes : '') + '" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" placeholder="備考"></div>'
+    + '</div>';
+}
+
+function showAddPaymentModal(dealId) {
+  showModal('入金情報を追加',
+    paymentFormHtml('pay', null),
+    '<button onclick="submitAddPayment(\'' + dealId + '\')" class="px-4 py-2 text-sm bg-purple-600 text-white rounded-lg hover:bg-purple-700 font-medium"><i class="fas fa-plus mr-1"></i>追加</button>'
+    + '<button onclick="closeModal()" class="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">キャンセル</button>'
+  );
+
+  // 入金種別変更時にラベル自動セット
+  document.getElementById('pay-type').onchange = function() {
+    var labels = { advance: '着手金', interim: '中間金', final: '完了金', other: '' };
+    var labelEl = document.getElementById('pay-label');
+    if (!labelEl.value || Object.values(labels).includes(labelEl.value)) {
+      labelEl.value = labels[this.value] || '';
+    }
+  };
+  document.getElementById('pay-type').dispatchEvent(new Event('change'));
+}
+
+async function submitAddPayment(dealId) {
+  var label = document.getElementById('pay-label').value;
+  var type = document.getElementById('pay-type').value;
+  if (!label) { showToast('ラベルは必須です', 'error'); return; }
+  try {
+    await api('/deals/' + dealId + '/payments', { method: 'POST', body: JSON.stringify({
+      payment_type: type,
+      label: label,
+      expected_amount: parseFloat(document.getElementById('pay-expected-amount').value) || null,
+      expected_date: document.getElementById('pay-expected-date').value || null,
+      actual_amount: parseFloat(document.getElementById('pay-actual-amount').value) || null,
+      actual_date: document.getElementById('pay-actual-date').value || null,
+      invoice_date: document.getElementById('pay-invoice-date').value || null,
+      notes: document.getElementById('pay-notes').value || null
+    })});
+    closeModal();
+    showToast('入金情報を追加しました');
+    renderPageContent();
+  } catch (err) { showToast(err.message, 'error'); }
+}
+
+async function showEditPaymentModal(dealId, paymentId) {
+  var data = await api('/deals/' + dealId);
+  var p = data.payments.find(function(x) { return x.id === paymentId; });
+  if (!p) { showToast('入金情報が見つかりません', 'error'); return; }
+
+  showModal('入金情報を編集',
+    paymentFormHtml('epay', p),
+    '<button onclick="submitEditPayment(\'' + dealId + '\', \'' + paymentId + '\')" class="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"><i class="fas fa-save mr-1"></i>更新</button>'
+    + '<button onclick="closeModal()" class="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">キャンセル</button>'
+  );
+}
+
+async function submitEditPayment(dealId, paymentId) {
+  try {
+    await api('/deals/' + dealId + '/payments/' + paymentId + '/update', { method: 'POST', body: JSON.stringify({
+      payment_type: document.getElementById('epay-type').value,
+      label: document.getElementById('epay-label').value,
+      expected_amount: parseFloat(document.getElementById('epay-expected-amount').value) || null,
+      expected_date: document.getElementById('epay-expected-date').value || null,
+      actual_amount: parseFloat(document.getElementById('epay-actual-amount').value) || null,
+      actual_date: document.getElementById('epay-actual-date').value || null,
+      invoice_date: document.getElementById('epay-invoice-date').value || null,
+      notes: document.getElementById('epay-notes').value || null
+    })});
+    closeModal();
+    showToast('入金情報を更新しました');
+    renderPageContent();
+  } catch (err) { showToast(err.message, 'error'); }
+}
+
+function deletePayment(dealId, paymentId, label) {
+  showConfirm('入金「' + label + '」を削除しますか？', async function() {
+    try {
+      await api('/deals/' + dealId + '/payments/' + paymentId + '/delete', { method: 'POST' });
+      showToast('入金情報を削除しました');
+      renderPageContent();
+    } catch (err) { showToast(err.message, 'error'); }
+  });
 }
 
 async function deleteDeal(dealId) {
@@ -2487,7 +2735,7 @@ async function deleteDeal(dealId) {
 // ====== 案件ダッシュボード ======
 async function renderDealDashboard(main) {
   const data = await api('/deals/dashboard/summary');
-  const { pipeline, paymentThisMonth, paymentNextMonth, overdue, receivedThisYear, monthlyPayments, upcomingConstruction } = data;
+  const { pipeline, paymentThisMonth, paymentNextMonth, overdue, receivedThisYear, monthlyPayments, profitSummary, upcomingConstruction } = data;
 
   // パイプラインデータ整理
   const pipelineOrder = ['estimate_approved','contracted','construction','construction_done','invoiced','payment_received','lost'];
@@ -2524,6 +2772,42 @@ async function renderDealDashboard(main) {
         <p class="text-2xl font-bold ${overdue.count > 0 ? 'text-red-600' : 'text-gray-400'}">${overdue.count}件</p>
         <p class="text-xs ${overdue.count > 0 ? 'text-red-500' : 'text-gray-400'} mt-1">${formatCurrency(overdue.total)}</p>
       </div>
+    </div>
+
+    <!-- 粗利サマリー -->
+    <div class="bg-white border border-gray-200 rounded-lg p-5 mb-6">
+      <h2 class="text-sm font-semibold text-gray-500 mb-3 uppercase tracking-wider"><i class="fas fa-calculator text-emerald-500 mr-1"></i>粗利サマリー</h2>
+      <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <div class="bg-gray-50 rounded-lg p-3 text-center">
+          <p class="text-xs text-gray-500">対象案件数</p>
+          <p class="text-xl font-bold text-gray-900">${profitSummary.total_deals}件</p>
+        </div>
+        <div class="bg-gray-50 rounded-lg p-3 text-center">
+          <p class="text-xs text-gray-500">売上合計</p>
+          <p class="text-xl font-bold text-indigo-600">${formatCurrency(profitSummary.total_revenue)}</p>
+        </div>
+        <div class="bg-gray-50 rounded-lg p-3 text-center">
+          <p class="text-xs text-gray-500">原価合計</p>
+          <p class="text-xl font-bold text-rose-600">${formatCurrency(profitSummary.total_cost)}</p>
+        </div>
+        <div class="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-center">
+          <p class="text-xs text-emerald-600">粗利合計</p>
+          <p class="text-xl font-bold text-emerald-700">${formatCurrency(profitSummary.total_profit)}</p>
+          <p class="text-xs text-emerald-500 mt-0.5">平均粗利率: ${Math.round(profitSummary.avg_profit_rate * 100)}%</p>
+        </div>
+      </div>
+      ${profitSummary.total_revenue > 0 ? `
+        <div class="mt-3">
+          <div class="flex rounded-full h-5 overflow-hidden bg-gray-200">
+            <div class="bg-rose-400 flex items-center justify-center text-white text-xs font-medium" style="width:${Math.round((1 - profitSummary.avg_profit_rate) * 100)}%">
+              原価 ${Math.round((1 - profitSummary.avg_profit_rate) * 100)}%
+            </div>
+            <div class="bg-emerald-500 flex items-center justify-center text-white text-xs font-medium" style="width:${Math.round(profitSummary.avg_profit_rate * 100)}%">
+              粗利 ${Math.round(profitSummary.avg_profit_rate * 100)}%
+            </div>
+          </div>
+        </div>
+      ` : ''}
     </div>
 
     <!-- パイプライン -->
