@@ -234,6 +234,8 @@ function renderLogin(app) {
 // ============================================================
 function renderApp(app) {
   const isAdmin = hasRole('admin');
+  const isApprover = hasRole('approver');
+  const canSeeDeal = isAdmin || isApprover;
   const userName = state.user?.displayName || state.user?.email;
   
   app.innerHTML = `
@@ -293,14 +295,16 @@ function renderApp(app) {
               <a href="/admin/audit-logs" onclick="event.preventDefault();navigate('admin-audit')" class="sidebar-link ${state.currentPage==='admin-audit'?'active':''}">
                 <i class="fas fa-history w-5 text-center"></i><span>監査ログ</span>
               </a>
+            ` : ''}
+            ${canSeeDeal ? `
               <div class="pt-3 mt-3 border-t border-gray-200">
-                <p class="px-3 py-1 text-xs font-semibold text-gray-400 uppercase">案件管理</p>
+                <p class="px-3 py-1 text-xs font-semibold text-gray-400 uppercase">${isAdmin ? '案件管理' : '案件チェック'}</p>
               </div>
               <a href="/admin/deal-dashboard" onclick="event.preventDefault();navigate('deal-dashboard')" class="sidebar-link ${state.currentPage==='deal-dashboard'?'active':''}">
-                <i class="fas fa-chart-line w-5 text-center"></i><span>案件ダッシュボード</span>
+                <i class="fas fa-chart-line w-5 text-center"></i><span>${isAdmin ? '案件ダッシュボード' : '案件概況'}</span>
               </a>
               <a href="/admin/deals" onclick="event.preventDefault();navigate('admin-deals')" class="sidebar-link ${state.currentPage==='admin-deals'||state.currentPage==='admin-deal-detail'?'active':''}">
-                <i class="fas fa-project-diagram w-5 text-center"></i><span>案件一覧</span>
+                <i class="fas ${isAdmin ? 'fa-project-diagram' : 'fa-clipboard-check'} w-5 text-center"></i><span>${isAdmin ? '案件一覧' : '案件一覧'}</span>
               </a>
             ` : ''}
           </nav>
@@ -2238,6 +2242,15 @@ function dealStatusOptions(current) {
 
 // ====== 案件一覧 ======
 async function renderDealList(main) {
+  const isAdmin = hasRole('admin');
+
+  // 承認者向け：シンプルな案件チェック画面
+  if (!isAdmin) {
+    await renderDealListApprover(main);
+    return;
+  }
+
+  // 管理者向け：従来の詳細一覧
   const status = state.pageParams?.status || '';
   const keyword = state.pageParams?.keyword || '';
   const params = new URLSearchParams();
@@ -2331,6 +2344,99 @@ async function renderDealList(main) {
         </div>
       </div>
     `}`;
+}
+
+// ====== 承認者向け：シンプル案件チェック画面 ======
+async function renderDealListApprover(main) {
+  const data = await api('/deals');
+  const deals = data.deals || [];
+
+  // 工事決定待ち（見積承認済み）と、それ以外に分ける
+  const pendingDecision = deals.filter(d => d.deal_status === 'estimate_approved');
+  const otherDeals = deals.filter(d => d.deal_status !== 'estimate_approved');
+
+  main.innerHTML = `
+    <div class="mb-6">
+      <h1 class="text-xl font-bold text-gray-900"><i class="fas fa-clipboard-check text-indigo-600 mr-2"></i>案件チェック</h1>
+      <p class="text-sm text-gray-500 mt-1">工事が決まった案件を確定してください</p>
+    </div>
+
+    <!-- 工事決定待ち -->
+    <div class="mb-6">
+      <div class="flex items-center gap-2 mb-3">
+        <h2 class="text-base font-bold text-orange-700"><i class="fas fa-exclamation-circle mr-1"></i>工事決定待ち</h2>
+        ${pendingDecision.length > 0 ? `<span class="bg-orange-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">${pendingDecision.length}</span>` : ''}
+      </div>
+      ${pendingDecision.length === 0 ? `
+        <div class="bg-green-50 border border-green-200 rounded-lg p-6 text-center">
+          <i class="fas fa-check-circle text-green-400 text-2xl mb-2"></i>
+          <p class="text-green-700 text-sm font-medium">工事決定待ちの案件はありません</p>
+        </div>
+      ` : `
+        <div class="space-y-3">
+          ${pendingDecision.map(d => `
+            <div class="bg-white border-2 border-orange-200 rounded-lg p-4 hover:border-orange-300 transition-colors">
+              <div class="flex items-start justify-between gap-4">
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-center gap-2 mb-1">
+                    <span class="text-xs font-mono text-gray-400">#${String(d.request_number).padStart(4,'0')}</span>
+                    ${dealStatusBadge(d.deal_status)}
+                  </div>
+                  <h3 class="font-bold text-gray-900 text-base mb-1 truncate">${d.title}</h3>
+                  <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-gray-600">
+                    <span><i class="fas fa-building text-gray-400 mr-1"></i>${d.client_name}</span>
+                    <span><i class="fas fa-yen-sign text-gray-400 mr-1"></i>${formatCurrency(d.amount_with_tax)}<span class="text-[10px] text-gray-400 ml-0.5">税込</span></span>
+                    <span><i class="fas fa-user text-gray-400 mr-1"></i>${d.applicant_name}</span>
+                  </div>
+                </div>
+                <div class="flex flex-col gap-2 flex-shrink-0">
+                  <button onclick="event.stopPropagation();confirmContract('${d.id}')" 
+                    class="px-5 py-2.5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-bold text-sm shadow-sm whitespace-nowrap">
+                    <i class="fas fa-check-circle mr-1"></i>工事決定
+                  </button>
+                  <button onclick="navigate('admin-deal-detail',{id:'${d.id}'})" 
+                    class="px-3 py-1.5 text-xs text-gray-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg text-center">
+                    詳細を見る
+                  </button>
+                </div>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      `}
+    </div>
+
+    <!-- 処理済み案件 -->
+    ${otherDeals.length > 0 ? `
+    <div>
+      <h2 class="text-base font-bold text-gray-600 mb-3"><i class="fas fa-list mr-1"></i>処理済み・進行中の案件（${otherDeals.length}件）</h2>
+      <div class="bg-white border border-gray-200 rounded-lg overflow-hidden">
+        <table class="w-full text-sm">
+          <thead class="bg-gray-50 border-b border-gray-200">
+            <tr>
+              <th class="px-4 py-2 text-left font-medium text-gray-500 text-xs">#</th>
+              <th class="px-4 py-2 text-left font-medium text-gray-500 text-xs">件名</th>
+              <th class="px-4 py-2 text-left font-medium text-gray-500 text-xs">取引先</th>
+              <th class="px-4 py-2 text-right font-medium text-gray-500 text-xs">見積金額（税込）</th>
+              <th class="px-4 py-2 text-center font-medium text-gray-500 text-xs">ステータス</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-gray-100">
+            ${otherDeals.map(d => `
+              <tr class="hover:bg-gray-50 cursor-pointer" onclick="navigate('admin-deal-detail',{id:'${d.id}'})">
+                <td class="px-4 py-2.5 font-mono text-gray-400 text-xs">${String(d.request_number).padStart(4,'0')}</td>
+                <td class="px-4 py-2.5 font-medium max-w-[200px] truncate">${d.title}</td>
+                <td class="px-4 py-2.5 text-gray-600 max-w-[150px] truncate">${d.client_name}</td>
+                <td class="px-4 py-2.5 text-right">${formatCurrency(d.amount_with_tax)}</td>
+                <td class="px-4 py-2.5 text-center">${dealStatusBadge(d.deal_status)}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    ` : ''}`
+  ;
 }
 
 function applyDealFilters() {
@@ -2428,6 +2534,13 @@ async function renderDealDetail(main) {
 
   const data = await api(`/deals/${id}`);
   const d = data.deal;
+  const isAdmin = hasRole('admin');
+
+  // 承認者向け: シンプルな閲覧ビュー + 工事決定ボタンのみ
+  if (!isAdmin) {
+    renderDealDetailReadonly(main, d, data.payments);
+    return;
+  }
 
   // 税率（見積もりの税率をデフォルトに使用）
   const taxRate = d.contract_tax_rate || d.tax_rate || 0.10;
@@ -2785,8 +2898,73 @@ async function deleteDeal(dealId) {
   });
 }
 
+// ====== 承認者向け: 案件詳細（読み取り専用・シンプル） ======
+function renderDealDetailReadonly(main, d, payments) {
+  const isWaitingDecision = d.deal_status === 'estimate_approved';
+
+  main.innerHTML = '<div class="flex items-center gap-3 mb-4">'
+    + '<button onclick="navigate(\'admin-deals\')" class="text-gray-500 hover:text-gray-700"><i class="fas fa-arrow-left"></i></button>'
+    + '<h1 class="text-xl font-bold text-gray-900">#' + String(d.request_number).padStart(4,'0') + ' ' + d.title + '</h1>'
+    + dealStatusBadge(d.deal_status)
+    + '</div>'
+
+    // 工事決定確定ボタン（estimate_approved の場合のみ・大きく目立つ）
+    + (isWaitingDecision ? 
+      '<div class="bg-indigo-50 border-2 border-indigo-300 rounded-xl p-6 mb-5 text-center">'
+      + '<p class="text-indigo-800 font-bold text-base mb-1"><i class="fas fa-handshake mr-2"></i>この案件の工事が決定しましたか？</p>'
+      + '<p class="text-sm text-indigo-500 mb-4">確定後、契約や工事の詳細管理は岩野が行います</p>'
+      + '<button onclick="confirmContract(\'' + d.id + '\')" class="px-8 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-bold text-base shadow-md">'
+      + '<i class="fas fa-check-circle mr-2"></i>工事決定を確定する'
+      + '</button>'
+      + '</div>'
+    : '')
+
+    // 案件情報
+    + '<div class="bg-white border border-gray-200 rounded-lg p-5 mb-4">'
+    + '<h2 class="text-sm font-semibold text-gray-500 mb-3"><i class="fas fa-info-circle mr-1"></i>案件情報</h2>'
+    + '<div class="grid grid-cols-1 sm:grid-cols-2 gap-y-3 gap-x-6 text-sm">'
+    + '<div><span class="text-gray-400 text-xs">取引先</span><p class="font-medium text-gray-900">' + d.client_name + '</p></div>'
+    + '<div><span class="text-gray-400 text-xs">申請者</span><p class="font-medium text-gray-900">' + d.applicant_name + '</p></div>'
+    + '<div><span class="text-gray-400 text-xs">見積金額（税込）</span><p class="font-bold text-lg text-gray-900">' + formatCurrency(d.amount_with_tax) + '</p></div>'
+    + '<div><span class="text-gray-400 text-xs">見積金額（税抜）</span><p class="font-medium text-gray-500">' + formatCurrency(d.amount) + '</p></div>'
+    + (d.remarks ? '<div class="sm:col-span-2"><span class="text-gray-400 text-xs">備考</span><p class="font-medium text-gray-700">' + d.remarks + '</p></div>' : '')
+    + '</div></div>'
+
+    // 進捗情報（工事決定済みの場合のみ簡潔に表示）
+    + (!isWaitingDecision ? 
+      '<div class="bg-white border border-gray-200 rounded-lg p-5 mb-4">'
+      + '<h2 class="text-sm font-semibold text-gray-500 mb-3"><i class="fas fa-tasks mr-1"></i>進捗状況</h2>'
+      + '<div class="grid grid-cols-2 sm:grid-cols-3 gap-y-3 gap-x-6 text-sm">'
+      + (d.contract_date ? '<div><span class="text-gray-400 text-xs">契約日</span><p class="font-medium">' + d.contract_date + '</p></div>' : '')
+      + (d.construction_start ? '<div><span class="text-gray-400 text-xs">工事開始</span><p class="font-medium">' + d.construction_start + '</p></div>' : '')
+      + (d.construction_end ? '<div><span class="text-gray-400 text-xs">工事完了</span><p class="font-medium">' + d.construction_end + '</p></div>' : '')
+      + (d.notes ? '<div class="sm:col-span-3"><span class="text-gray-400 text-xs">メモ</span><p class="font-medium text-gray-600">' + d.notes + '</p></div>' : '')
+      + '</div></div>'
+    : '')
+
+    + '<button onclick="navigate(\'admin-deals\')" class="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50"><i class="fas fa-arrow-left mr-1"></i>案件一覧に戻る</button>';
+}
+
+async function confirmContract(dealId) {
+  showConfirm('この案件の工事決定を確定しますか？', async function() {
+    try {
+      await api('/deals/' + dealId + '/confirm-contract', { method: 'POST' });
+      showToast('工事決定を確定しました');
+      renderPageContent();
+    } catch (err) { showToast(err.message, 'error'); }
+  });
+}
+
 // ====== 案件ダッシュボード ======
 async function renderDealDashboard(main) {
+  const isAdmin = hasRole('admin');
+
+  // 承認者向け：シンプルなダッシュボード
+  if (!isAdmin) {
+    await renderDealDashboardApprover(main);
+    return;
+  }
+
   const data = await api('/deals/dashboard/summary');
   const { pipeline, paymentThisMonth, paymentNextMonth, overdue, receivedThisYear, monthlyPayments, profitSummary, upcomingConstruction } = data;
 
@@ -2942,6 +3120,61 @@ async function renderDealDashboard(main) {
         `).join('')}
       </div>
     </div>` : ''}`;
+}
+
+// ====== 承認者向け: シンプルダッシュボード ======
+async function renderDealDashboardApprover(main) {
+  const data = await api('/deals/dashboard/summary');
+  const { pipeline } = data;
+
+  // パイプラインデータ整理
+  const pipelineOrder = ['estimate_approved','contracted','construction','construction_done','invoiced','payment_received'];
+  const pipelineData = {};
+  pipelineOrder.forEach(s => { pipelineData[s] = { count: 0 }; });
+  pipeline.forEach(p => { pipelineData[p.deal_status] = { count: p.count, total_incl: p.total_incl || 0 }; });
+
+  const pendingCount = pipelineData.estimate_approved?.count || 0;
+  const totalActive = pipeline.filter(p => p.deal_status !== 'lost' && p.deal_status !== 'payment_received')
+                              .reduce((s, p) => s + p.count, 0);
+
+  main.innerHTML = `
+    <div class="mb-6">
+      <h1 class="text-xl font-bold text-gray-900"><i class="fas fa-chart-line text-indigo-600 mr-2"></i>案件ダッシュボード</h1>
+      <p class="text-sm text-gray-500 mt-1">案件の全体状況を確認できます</p>
+    </div>
+
+    <!-- 工事決定待ちハイライト -->
+    <div class="mb-6 ${pendingCount > 0 ? 'bg-orange-50 border-2 border-orange-300' : 'bg-green-50 border border-green-200'} rounded-xl p-5 text-center">
+      ${pendingCount > 0 ? `
+        <p class="text-orange-800 font-bold text-lg mb-1"><i class="fas fa-exclamation-circle mr-1"></i>工事決定待ち: ${pendingCount}件</p>
+        <p class="text-sm text-orange-600 mb-3">確認が必要な案件があります</p>
+        <button onclick="navigate('admin-deals')" class="px-6 py-2.5 bg-orange-600 text-white rounded-lg hover:bg-orange-700 font-bold text-sm shadow-sm">
+          <i class="fas fa-arrow-right mr-1"></i>案件一覧で確認する
+        </button>
+      ` : `
+        <p class="text-green-700 font-bold text-base"><i class="fas fa-check-circle mr-1"></i>工事決定待ちの案件はありません</p>
+      `}
+    </div>
+
+    <!-- ステータス別件数 -->
+    <div class="bg-white border border-gray-200 rounded-lg p-5">
+      <h2 class="text-sm font-semibold text-gray-500 mb-4">案件ステータス</h2>
+      <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
+        ${pipelineOrder.map(s => {
+          const info = DEAL_STATUS_MAP[s];
+          const d = pipelineData[s];
+          const isHighlight = s === 'estimate_approved' && d.count > 0;
+          return `
+            <div class="rounded-lg p-3 text-center ${isHighlight ? 'bg-orange-50 border-2 border-orange-200' : 'bg-gray-50 border border-gray-100'} cursor-pointer hover:shadow-sm"
+                 onclick="navigate('admin-deals',{status:'${s}'})">
+              <div class="text-lg mb-1"><i class="fas ${info.icon} ${info.color.split(' ')[1]}"></i></div>
+              <p class="text-xs text-gray-500">${info.label}</p>
+              <p class="text-xl font-bold text-gray-900">${d.count}</p>
+            </div>`;
+        }).join('')}
+      </div>
+      <p class="text-xs text-gray-400 text-center mt-3">進行中案件: ${totalActive}件</p>
+    </div>`;
 }
 
 // ============================================================

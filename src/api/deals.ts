@@ -11,6 +11,16 @@ async function getAdminUser(c: any) {
   return payload
 }
 
+// 管理者または承認者（閲覧用）
+async function getAdminOrApprover(c: any) {
+  const authHeader = c.req.header('Authorization')
+  if (!authHeader?.startsWith('Bearer ')) return null
+  const payload = await verifyToken(authHeader.substring(7))
+  if (!payload) return null
+  if (!hasRole(payload.role, 'admin') && !hasRole(payload.role, 'approver')) return null
+  return { ...payload, isAdmin: hasRole(payload.role, 'admin'), isApprover: hasRole(payload.role, 'approver') }
+}
+
 async function getUser(c: any) {
   const authHeader = c.req.header('Authorization')
   if (!authHeader?.startsWith('Bearer ')) return null
@@ -19,10 +29,10 @@ async function getUser(c: any) {
 
 export const dealRoutes = new Hono<{ Bindings: Bindings }>()
 
-// ====== 案件一覧（管理者のみ） ======
+// ====== 案件一覧（管理者・承認者） ======
 dealRoutes.get('/', async (c) => {
-  const admin = await getAdminUser(c)
-  if (!admin) return c.json({ error: '管理者権限が必要です' }, 403)
+  const user = await getAdminOrApprover(c)
+  if (!user) return c.json({ error: '権限が必要です' }, 403)
 
   const status = c.req.query('status') || ''
   const keyword = c.req.query('keyword') || ''
@@ -63,10 +73,10 @@ dealRoutes.get('/', async (c) => {
   return c.json({ deals: deals.results, paymentsMap })
 })
 
-// ====== 案件詳細 ======
+// ====== 案件詳細（管理者・承認者） ======
 dealRoutes.get('/:id', async (c) => {
-  const admin = await getAdminUser(c)
-  if (!admin) return c.json({ error: '管理者権限が必要です' }, 403)
+  const user = await getAdminOrApprover(c)
+  if (!user) return c.json({ error: '権限が必要です' }, 403)
 
   const id = c.req.param('id')
   const deal = await c.env.DB.prepare(
@@ -269,10 +279,10 @@ dealRoutes.post('/:id/payments/:paymentId/delete', async (c) => {
   return c.json({ message: '入金情報を削除しました' })
 })
 
-// ====== トラッキング未登録の承認済み見積もり一覧 ======
+// ====== トラッキング未登録の承認済み見積もり一覧（管理者・承認者） ======
 dealRoutes.get('/untracked/estimates', async (c) => {
-  const admin = await getAdminUser(c)
-  if (!admin) return c.json({ error: '管理者権限が必要です' }, 403)
+  const user = await getAdminOrApprover(c)
+  if (!user) return c.json({ error: '権限が必要です' }, 403)
 
   const estimates = await c.env.DB.prepare(
     `SELECT r.*, p.display_name as applicant_name
@@ -286,11 +296,39 @@ dealRoutes.get('/untracked/estimates', async (c) => {
   return c.json({ estimates: estimates.results })
 })
 
-// ====== ダッシュボード集計（管理者のみ） ======
+// ====== 工事決定確定（承認者が契約確定を押す） ======
+dealRoutes.post('/:id/confirm-contract', async (c) => {
+  const user = await getAdminOrApprover(c)
+  if (!user) return c.json({ error: '権限が必要です' }, 403)
+
+  const id = c.req.param('id')
+  const deal = await c.env.DB.prepare('SELECT * FROM deal_tracking WHERE id = ?').bind(id).first()
+  if (!deal) return c.json({ error: '案件が見つかりません' }, 404)
+
+  if (deal.deal_status !== 'estimate_approved') {
+    return c.json({ error: 'この案件は既に工事決定済みまたは別のステータスです' }, 400)
+  }
+
+  await c.env.DB.prepare(
+    `UPDATE deal_tracking SET deal_status = 'contracted', updated_at = datetime('now') WHERE id = ?`
+  ).bind(id).run()
+
+  await c.env.DB.prepare(
+    `INSERT INTO audit_logs (id, user_id, action, target_table, target_id, detail)
+     VALUES (?, ?, 'deal_contract_confirmed', 'deal_tracking', ?, ?)`
+  ).bind(generateId(), user.userId, id, JSON.stringify({
+    confirmed_by: user.displayName || user.userId,
+    old_status: 'estimate_approved',
+    new_status: 'contracted'
+  })).run()
+
+  return c.json({ message: '工事決定を確定しました' })
+})
+
+// ====== ダッシュボード集計（管理者・承認者） ======
 dealRoutes.get('/dashboard/summary', async (c) => {
-  const user = await getUser(c)
-  if (!user) return c.json({ error: '認証が必要です' }, 401)
-  if (!hasRole(user.role, 'admin')) return c.json({ error: '管理者権限が必要です' }, 403)
+  const user = await getAdminOrApprover(c)
+  if (!user) return c.json({ error: '権限が必要です' }, 403)
 
   // パイプラインごとの件数と金額（税抜・税込両方）
   const pipeline = await c.env.DB.prepare(
