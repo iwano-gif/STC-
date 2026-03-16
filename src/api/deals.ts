@@ -129,7 +129,7 @@ dealRoutes.post('/:id/update', async (c) => {
   const id = c.req.param('id')
   const body = await c.req.json()
   const {
-    deal_status, contract_date, contract_amount,
+    deal_status, contract_date, contract_amount, contract_amount_excl_tax, contract_tax_rate,
     construction_start, construction_end,
     cost_amount, profit_rate,
     notes
@@ -143,6 +143,8 @@ dealRoutes.post('/:id/update', async (c) => {
       deal_status = COALESCE(?, deal_status),
       contract_date = COALESCE(?, contract_date),
       contract_amount = COALESCE(?, contract_amount),
+      contract_amount_excl_tax = COALESCE(?, contract_amount_excl_tax),
+      contract_tax_rate = COALESCE(?, contract_tax_rate),
       construction_start = COALESCE(?, construction_start),
       construction_end = COALESCE(?, construction_end),
       cost_amount = COALESCE(?, cost_amount),
@@ -152,6 +154,8 @@ dealRoutes.post('/:id/update', async (c) => {
     WHERE id = ?`
   ).bind(
     deal_status || null, contract_date || null, contract_amount || null,
+    contract_amount_excl_tax !== undefined && contract_amount_excl_tax !== '' ? contract_amount_excl_tax : null,
+    contract_tax_rate !== undefined && contract_tax_rate !== '' ? contract_tax_rate : null,
     construction_start || null, construction_end || null,
     cost_amount !== undefined && cost_amount !== '' ? cost_amount : null,
     profit_rate !== undefined && profit_rate !== '' ? profit_rate : null,
@@ -288,11 +292,12 @@ dealRoutes.get('/dashboard/summary', async (c) => {
   if (!user) return c.json({ error: '認証が必要です' }, 401)
   if (!hasRole(user.role, 'admin')) return c.json({ error: '管理者権限が必要です' }, 403)
 
-  // パイプラインごとの件数と金額
+  // パイプラインごとの件数と金額（税抜・税込両方）
   const pipeline = await c.env.DB.prepare(
     `SELECT d.deal_status,
             COUNT(*) as count,
-            SUM(COALESCE(d.contract_amount, r.amount_with_tax)) as total_amount
+            SUM(COALESCE(d.contract_amount_excl_tax, r.amount)) as total_excl,
+            SUM(COALESCE(d.contract_amount, r.amount_with_tax)) as total_incl
      FROM deal_tracking d
      JOIN requests r ON d.request_id = r.id
      GROUP BY d.deal_status`
@@ -347,21 +352,22 @@ dealRoutes.get('/dashboard/summary', async (c) => {
      LIMIT 12`
   ).bind().all()
 
-  // 粗利集計
+  // 粗利集計（税抜ベース）
   const profitSummary = await c.env.DB.prepare(
     `SELECT
        COUNT(*) as total_deals,
-       SUM(COALESCE(d.contract_amount, r.amount_with_tax)) as total_revenue,
+       SUM(COALESCE(d.contract_amount_excl_tax, r.amount)) as total_revenue_excl,
+       SUM(COALESCE(d.contract_amount, r.amount_with_tax)) as total_revenue_incl,
        SUM(d.cost_amount) as total_cost,
-       SUM(COALESCE(d.contract_amount, r.amount_with_tax) - COALESCE(d.cost_amount, 0)) as total_profit
+       SUM(COALESCE(d.contract_amount_excl_tax, r.amount) - COALESCE(d.cost_amount, 0)) as total_profit
      FROM deal_tracking d
      JOIN requests r ON d.request_id = r.id
      WHERE d.deal_status NOT IN ('lost', 'estimate_approved')`
   ).bind().first()
 
-  // 直近の工事予定
+  // 直近の工事予定（税抜・税込両方取得）
   const upcomingConstruction = await c.env.DB.prepare(
-    `SELECT d.*, r.title, r.client_name, r.amount_with_tax, r.request_number
+    `SELECT d.*, r.title, r.client_name, r.amount, r.amount_with_tax, r.request_number
      FROM deal_tracking d JOIN requests r ON d.request_id = r.id
      WHERE d.deal_status IN ('contracted', 'construction') AND d.construction_start IS NOT NULL
      ORDER BY d.construction_start ASC
@@ -377,11 +383,12 @@ dealRoutes.get('/dashboard/summary', async (c) => {
     monthlyPayments: monthlyPayments.results,
     profitSummary: {
       total_deals: profitSummary?.total_deals || 0,
-      total_revenue: profitSummary?.total_revenue || 0,
+      total_revenue_excl: profitSummary?.total_revenue_excl || 0,
+      total_revenue_incl: profitSummary?.total_revenue_incl || 0,
       total_cost: profitSummary?.total_cost || 0,
       total_profit: profitSummary?.total_profit || 0,
-      avg_profit_rate: profitSummary?.total_revenue
-        ? ((profitSummary.total_revenue as number) - ((profitSummary.total_cost as number) || 0)) / (profitSummary.total_revenue as number)
+      avg_profit_rate: profitSummary?.total_revenue_excl
+        ? ((profitSummary.total_revenue_excl as number) - ((profitSummary.total_cost as number) || 0)) / (profitSummary.total_revenue_excl as number)
         : 0
     },
     upcomingConstruction: upcomingConstruction.results

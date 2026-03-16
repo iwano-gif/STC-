@@ -2264,7 +2264,7 @@ async function renderDealList(main) {
               <span class="text-xs font-mono text-gray-500">#${String(e.request_number).padStart(4,'0')}</span>
               <span class="font-medium text-sm ml-2">${e.title}</span>
               <span class="text-sm text-gray-500 ml-2">${e.client_name}</span>
-              <span class="text-sm font-medium ml-2">${formatCurrency(e.amount_with_tax)}</span>
+              <span class="text-sm font-medium ml-2">${formatCurrency(e.amount_with_tax)}<span class="text-[9px] text-gray-400 ml-0.5">税込</span></span>
             </div>
             <button onclick="startTracking('${e.id}')" class="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex-shrink-0">
               <i class="fas fa-play mr-1"></i>追跡開始
@@ -2299,18 +2299,19 @@ async function renderDealList(main) {
                 <th class="px-4 py-3 text-left font-medium text-gray-500">#</th>
                 <th class="px-4 py-3 text-left font-medium text-gray-500">件名</th>
                 <th class="px-4 py-3 text-left font-medium text-gray-500">取引先</th>
-                <th class="px-4 py-3 text-right font-medium text-gray-500">見積金額</th>
-                <th class="px-4 py-3 text-right font-medium text-gray-500">契約金額</th>
-                <th class="px-4 py-3 text-right font-medium text-gray-500">粗利率</th>
+                <th class="px-4 py-3 text-right font-medium text-gray-500">見積金額<span class="block text-[10px] text-gray-400 font-normal">税込</span></th>
+                <th class="px-4 py-3 text-right font-medium text-gray-500">契約金額<span class="block text-[10px] text-gray-400 font-normal">税抜</span></th>
+                <th class="px-4 py-3 text-right font-medium text-gray-500">粗利率<span class="block text-[10px] text-gray-400 font-normal">税抜ベース</span></th>
                 <th class="px-4 py-3 text-center font-medium text-gray-500">ステータス</th>
                 <th class="px-4 py-3 text-right font-medium text-gray-500">入金状況</th>
               </tr>
             </thead>
             <tbody class="divide-y divide-gray-100">
               ${data.deals.map(d => {
-                const base = d.contract_amount || d.amount_with_tax || 0;
+                // 粗利率は全て税抜ベースで統一
+                const revenueExcl = d.contract_amount_excl_tax || d.amount || 0;
                 const cost = d.cost_amount || 0;
-                const profitRate = (cost && base) ? Math.round((base - cost) / base * 100) : null;
+                const profitRate = (cost && revenueExcl) ? Math.round((revenueExcl - cost) / revenueExcl * 100) : null;
                 const pm = data.paymentsMap?.[d.id] || { received: 0, expected: 0 };
                 const payPct = pm.expected > 0 ? Math.round(pm.received / pm.expected * 100) : null;
                 return `
@@ -2319,7 +2320,7 @@ async function renderDealList(main) {
                   <td class="px-4 py-3 font-medium max-w-[200px] truncate">${d.title}</td>
                   <td class="px-4 py-3 text-gray-600 max-w-[150px] truncate">${d.client_name}</td>
                   <td class="px-4 py-3 text-right">${formatCurrency(d.amount_with_tax)}</td>
-                  <td class="px-4 py-3 text-right font-medium">${d.contract_amount ? formatCurrency(d.contract_amount) : '-'}</td>
+                  <td class="px-4 py-3 text-right">${d.contract_amount_excl_tax ? `<span class="font-medium">${formatCurrency(d.contract_amount_excl_tax)}</span>` : (d.contract_amount ? `<span class="font-medium">${formatCurrency(d.contract_amount)}<sup class="text-[9px] text-gray-400 ml-0.5">税込</sup></span>` : '-')}</td>
                   <td class="px-4 py-3 text-right">${profitRate !== null ? `<span class="${profitRate >= 20 ? 'text-emerald-600' : profitRate >= 10 ? 'text-yellow-600' : 'text-red-600'} font-medium">${profitRate}%</span>` : '<span class="text-gray-300">-</span>'}</td>
                   <td class="px-4 py-3 text-center">${dealStatusBadge(d.deal_status)}</td>
                   <td class="px-4 py-3 text-right text-xs">${payPct !== null ? `<div class="flex items-center gap-1 justify-end"><div class="w-12 bg-gray-200 rounded-full h-2"><div class="bg-green-500 rounded-full h-2" style="width:${payPct}%"></div></div><span class="text-gray-600">${payPct}%</span></div>` : '<span class="text-gray-300">-</span>'}</td>
@@ -2410,11 +2411,11 @@ function renderPaymentsSection(payments, dealId) {
     + '</div></div>';
 }
 
-function renderProfitBar(base, cost) {
-  if (!cost || !base) return '';
-  const profitPct = Math.max(0, Math.min(100, Math.round((base - cost) / base * 100)));
+function renderProfitBar(revenueExcl, cost) {
+  if (!cost || !revenueExcl) return '';
+  const profitPct = Math.max(0, Math.min(100, Math.round((revenueExcl - cost) / revenueExcl * 100)));
   const costPct = 100 - profitPct;
-  return '<div class="text-xs text-gray-500 mb-1">契約額 ' + formatCurrency(base) + ' の内訳</div>'
+  return '<div class="text-xs text-gray-500 mb-1">税抜契約額 ' + formatCurrency(revenueExcl) + ' の内訳</div>'
     + '<div class="flex rounded-full h-6 overflow-hidden bg-gray-200">'
     + '<div class="bg-rose-400 flex items-center justify-center text-white text-xs font-medium" style="width:' + costPct + '%">原価 ' + costPct + '%</div>'
     + '<div class="bg-emerald-500 flex items-center justify-center text-white text-xs font-medium" style="width:' + profitPct + '%">粗利 ' + profitPct + '%</div>'
@@ -2427,9 +2428,18 @@ async function renderDealDetail(main) {
 
   const data = await api(`/deals/${id}`);
   const d = data.deal;
-  const baseAmount = d.contract_amount || d.amount_with_tax || 0;
+
+  // 税率（見積もりの税率をデフォルトに使用）
+  const taxRate = d.contract_tax_rate || d.tax_rate || 0.10;
+  const taxRatePct = Math.round(taxRate * 100);
+  // 税抜契約額（入力値 or 見積もり税抜額をフォールバック）
+  const contractExcl = d.contract_amount_excl_tax || d.amount || 0;
+  // 税込契約額
+  const contractIncl = d.contract_amount || d.amount_with_tax || 0;
+  // 原価（税抜）
   const costAmount = d.cost_amount || 0;
-  const profitAmount = baseAmount - costAmount;
+  // 粗利 = 税抜契約額 - 原価（全て税抜同士の比較）
+  const profitAmount = contractExcl - costAmount;
   const profitDisplay = costAmount ? formatCurrency(profitAmount) : '-';
   const profitRateDisplay = d.profit_rate != null ? (Math.round(d.profit_rate * 100 * 100) / 100).toString() : '';
 
@@ -2443,18 +2453,29 @@ async function renderDealDetail(main) {
     <!-- 元の見積もり情報 -->
     <div class="bg-white border border-gray-200 rounded-lg p-5 mb-4">
       <h2 class="text-sm font-semibold text-gray-500 mb-3 uppercase tracking-wider">見積もり情報</h2>
-      <div class="grid grid-cols-1 sm:grid-cols-2 gap-y-3 gap-x-6 text-sm">
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-y-3 gap-x-6 text-sm">
         <div><span class="text-gray-500">件名</span><p class="font-medium">${d.title}</p></div>
         <div><span class="text-gray-500">取引先</span><p class="font-medium">${d.client_name}</p></div>
-        <div><span class="text-gray-500">見積金額（税込）</span><p class="font-medium text-lg">${formatCurrency(d.amount_with_tax)}</p></div>
         <div><span class="text-gray-500">申請者</span><p class="font-medium">${d.applicant_name}</p></div>
+        <div>
+          <span class="text-gray-500">見積金額（税抜）</span>
+          <p class="font-medium text-lg">${formatCurrency(d.amount)}</p>
+        </div>
+        <div>
+          <span class="text-gray-500">税率 / 消費税</span>
+          <p class="font-medium">${Math.round(d.tax_rate * 100)}% / ${formatCurrency(d.amount_with_tax - d.amount)}</p>
+        </div>
+        <div>
+          <span class="text-gray-500">見積金額（税込）</span>
+          <p class="font-medium text-gray-500">${formatCurrency(d.amount_with_tax)}</p>
+        </div>
         <div><span class="text-gray-500">見積日</span><p class="font-medium">${formatDate(d.request_date)}</p></div>
         ${d.remarks ? `<div class="sm:col-span-2"><span class="text-gray-500">備考</span><p class="font-medium">${d.remarks}</p></div>` : ''}
       </div>
     </div>
 
     <!-- 案件進捗管理フォーム -->
-    <form id="deal-form" data-fallback-amt="${d.amount_with_tax || 0}" class="space-y-4">
+    <form id="deal-form" data-fallback-excl="${d.amount || 0}" data-fallback-rate="${d.tax_rate || 0.10}" class="space-y-4">
       <div class="bg-white border border-gray-200 rounded-lg p-5">
         <h2 class="text-sm font-semibold text-gray-500 mb-4 uppercase tracking-wider">案件進捗</h2>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -2471,23 +2492,39 @@ async function renderDealDetail(main) {
         </div>
       </div>
 
+      <!-- 契約情報：税抜・税込をセットで表示 -->
       <div class="bg-white border border-gray-200 rounded-lg p-5">
         <h2 class="text-sm font-semibold text-indigo-600 mb-4"><i class="fas fa-handshake mr-1"></i>契約情報</h2>
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <div>
             <label class="block text-sm font-medium text-gray-700 mb-1">契約日</label>
             <input type="date" id="deal-contract-date" value="${d.contract_date || ''}" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
           </div>
           <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1">契約金額（税込）</label>
-            <input type="number" id="deal-contract-amount" value="${d.contract_amount || ''}" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" placeholder="0">
+            <label class="block text-sm font-medium text-gray-700 mb-1">税率</label>
+            <select id="deal-contract-tax-rate" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" onchange="recalcContractTax()">
+              <option value="0.10" ${taxRate === 0.10 ? 'selected' : ''}>10%</option>
+              <option value="0.08" ${taxRate === 0.08 ? 'selected' : ''}>8%（軽減）</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-indigo-700 mb-1">契約金額（税抜）</label>
+            <input type="number" id="deal-contract-excl" value="${d.contract_amount_excl_tax || ''}" class="w-full px-3 py-2 border border-indigo-300 rounded-lg text-sm font-medium bg-indigo-50" placeholder="0" oninput="recalcContractTax()">
+            <p class="text-xs text-gray-400 mt-0.5">← 粗利計算の基準</p>
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-500 mb-1">契約金額（税込）</label>
+            <div id="deal-contract-incl-display" class="px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-600">
+              ${contractExcl ? formatCurrency(Math.round(contractExcl * (1 + taxRate))) : '-'}
+            </div>
+            <input type="hidden" id="deal-contract-amount" value="${d.contract_amount || ''}">
           </div>
         </div>
       </div>
 
-      <!-- 原価・利益率 -->
+      <!-- 原価・粗利（全て税抜ベース） -->
       <div class="bg-white border border-gray-200 rounded-lg p-5">
-        <h2 class="text-sm font-semibold text-emerald-600 mb-4"><i class="fas fa-calculator mr-1"></i>原価・粗利</h2>
+        <h2 class="text-sm font-semibold text-emerald-600 mb-4"><i class="fas fa-calculator mr-1"></i>原価・粗利 <span class="text-xs font-normal text-gray-400 ml-1">※全て税抜ベース</span></h2>
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div>
             <label class="block text-sm font-medium text-gray-700 mb-1">原価（税抜）</label>
@@ -2496,19 +2533,20 @@ async function renderDealDetail(main) {
               oninput="calcProfit()">
           </div>
           <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1">利益率（%）</label>
+            <label class="block text-sm font-medium text-gray-700 mb-1">粗利率（%）</label>
             <input type="number" id="deal-profit-rate" value="${profitRateDisplay}" 
               class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" placeholder="例: 30" step="0.01"
               oninput="calcProfitFromRate()">
+            <p class="text-xs text-gray-400 mt-0.5">粗利率 = (税抜契約額 - 原価) / 税抜契約額</p>
           </div>
           <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1">粗利額</label>
+            <label class="block text-sm font-medium text-gray-700 mb-1">粗利額（税抜）</label>
             <div id="deal-profit-display" class="px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm font-bold text-emerald-700">
               ${profitDisplay}
             </div>
           </div>
         </div>
-        <div id="profit-summary-bar" class="mt-3">${renderProfitBar(baseAmount, costAmount)}</div>
+        <div id="profit-summary-bar" class="mt-3">${renderProfitBar(contractExcl, costAmount)}</div>
       </div>
 
       <div class="bg-white border border-gray-200 rounded-lg p-5">
@@ -2528,7 +2566,7 @@ async function renderDealDetail(main) {
       <!-- 分割入金管理 -->
       <div class="bg-white border border-gray-200 rounded-lg p-5">
         <div class="flex items-center justify-between mb-4">
-          <h2 class="text-sm font-semibold text-purple-600"><i class="fas fa-coins mr-1"></i>分割入金管理</h2>
+          <h2 class="text-sm font-semibold text-purple-600"><i class="fas fa-coins mr-1"></i>分割入金管理 <span class="text-xs font-normal text-gray-400 ml-1">※税込金額で入力</span></h2>
           <button type="button" onclick="showAddPaymentModal('${d.id}')" class="px-3 py-1.5 text-xs bg-purple-600 text-white rounded-lg hover:bg-purple-700">
             <i class="fas fa-plus mr-1"></i>入金追加
           </button>
@@ -2549,34 +2587,45 @@ async function renderDealDetail(main) {
       </div>
     </form>`;
 
-  // 原価→粗利 自動計算
+  // 税込自動計算
+  window.recalcContractTax = function() {
+    var excl = parseFloat(document.getElementById('deal-contract-excl').value) || 0;
+    var rate = parseFloat(document.getElementById('deal-contract-tax-rate').value) || 0.10;
+    var incl = Math.round(excl * (1 + rate));
+    document.getElementById('deal-contract-incl-display').textContent = excl ? formatCurrency(incl) : '-';
+    document.getElementById('deal-contract-amount').value = excl ? incl : '';
+    // 粗利も再計算
+    calcProfit();
+  };
+
+  // 原価→粗利 自動計算（税抜ベース）
   window.calcProfit = function() {
-    var fallbackAmt = parseFloat(document.getElementById('deal-form').dataset.fallbackAmt) || 0;
-    var base = parseFloat(document.getElementById('deal-contract-amount')?.value) || fallbackAmt;
-    var cost = parseFloat(document.getElementById('deal-cost-amount')?.value) || 0;
-    var profit = base - cost;
-    var rate = base > 0 ? (profit / base * 100) : 0;
+    var fallbackExcl = parseFloat(document.getElementById('deal-form').dataset.fallbackExcl) || 0;
+    var revenueExcl = parseFloat(document.getElementById('deal-contract-excl').value) || fallbackExcl;
+    var cost = parseFloat(document.getElementById('deal-cost-amount').value) || 0;
+    var profit = revenueExcl - cost;
+    var rate = revenueExcl > 0 ? (profit / revenueExcl * 100) : 0;
     document.getElementById('deal-profit-display').textContent = cost ? formatCurrency(profit) : '-';
     document.getElementById('deal-profit-rate').value = cost ? rate.toFixed(2) : '';
-    updateProfitBar(base, cost);
+    updateProfitBar(revenueExcl, cost);
   };
 
-  // 利益率→原価 自動計算
+  // 粗利率→原価 自動計算（税抜ベース）
   window.calcProfitFromRate = function() {
-    var fallbackAmt = parseFloat(document.getElementById('deal-form').dataset.fallbackAmt) || 0;
-    var base = parseFloat(document.getElementById('deal-contract-amount')?.value) || fallbackAmt;
-    var rateStr = document.getElementById('deal-profit-rate')?.value;
+    var fallbackExcl = parseFloat(document.getElementById('deal-form').dataset.fallbackExcl) || 0;
+    var revenueExcl = parseFloat(document.getElementById('deal-contract-excl').value) || fallbackExcl;
+    var rateStr = document.getElementById('deal-profit-rate').value;
     if (!rateStr) { document.getElementById('deal-profit-display').textContent = '-'; return; }
     var rate = parseFloat(rateStr);
-    var cost = base * (1 - rate / 100);
-    var profit = base - cost;
+    var cost = revenueExcl * (1 - rate / 100);
+    var profit = revenueExcl - cost;
     document.getElementById('deal-cost-amount').value = Math.round(cost);
     document.getElementById('deal-profit-display').textContent = formatCurrency(Math.round(profit));
-    updateProfitBar(base, cost);
+    updateProfitBar(revenueExcl, cost);
   };
 
-  function updateProfitBar(base, cost) {
-    document.getElementById('profit-summary-bar').innerHTML = renderProfitBar(base, cost);
+  function updateProfitBar(revenueExcl, cost) {
+    document.getElementById('profit-summary-bar').innerHTML = renderProfitBar(revenueExcl, cost);
   }
 
   document.getElementById('deal-form').onsubmit = async (e) => {
@@ -2584,10 +2633,14 @@ async function renderDealDetail(main) {
     try {
       const costVal = document.getElementById('deal-cost-amount').value;
       const rateVal = document.getElementById('deal-profit-rate').value;
+      const exclVal = document.getElementById('deal-contract-excl').value;
+      const taxRateVal = document.getElementById('deal-contract-tax-rate').value;
       await api(`/deals/${id}/update`, { method: 'POST', body: JSON.stringify({
         deal_status: document.getElementById('deal-status').value,
         contract_date: document.getElementById('deal-contract-date').value || null,
-        contract_amount: parseFloat(document.getElementById('deal-contract-amount').value) || null,
+        contract_amount_excl_tax: exclVal ? parseFloat(exclVal) : null,
+        contract_tax_rate: taxRateVal ? parseFloat(taxRateVal) : null,
+        contract_amount: document.getElementById('deal-contract-amount').value ? parseFloat(document.getElementById('deal-contract-amount').value) : null,
         construction_start: document.getElementById('deal-construction-start').value || null,
         construction_end: document.getElementById('deal-construction-end').value || null,
         cost_amount: costVal !== '' ? parseFloat(costVal) : null,
@@ -2740,12 +2793,12 @@ async function renderDealDashboard(main) {
   // パイプラインデータ整理
   const pipelineOrder = ['estimate_approved','contracted','construction','construction_done','invoiced','payment_received','lost'];
   const pipelineData = {};
-  pipelineOrder.forEach(s => { pipelineData[s] = { count: 0, total: 0 }; });
-  pipeline.forEach(p => { pipelineData[p.deal_status] = { count: p.count, total: p.total || 0 }; });
+  pipelineOrder.forEach(s => { pipelineData[s] = { count: 0, total_excl: 0, total_incl: 0 }; });
+  pipeline.forEach(p => { pipelineData[p.deal_status] = { count: p.count, total_excl: p.total_excl || 0, total_incl: p.total_incl || 0 }; });
 
   const totalDeals = pipeline.reduce((s, p) => s + p.count, 0);
-  const activeTotal = pipeline.filter(p => p.deal_status !== 'lost' && p.deal_status !== 'payment_received')
-                              .reduce((s, p) => s + (p.total || 0), 0);
+  const activeExcl = pipeline.filter(p => p.deal_status !== 'lost' && p.deal_status !== 'payment_received')
+                              .reduce((s, p) => s + (p.total_excl || 0), 0);
 
   main.innerHTML = `
     <h1 class="text-xl font-bold text-gray-900 mb-4"><i class="fas fa-chart-line text-indigo-600 mr-2"></i>案件ダッシュボード</h1>
@@ -2755,15 +2808,15 @@ async function renderDealDashboard(main) {
       <div class="bg-white rounded-lg border border-gray-200 p-4">
         <p class="text-xs text-gray-500">進行中案件</p>
         <p class="text-2xl font-bold text-indigo-600">${totalDeals - (pipelineData.payment_received?.count||0) - (pipelineData.lost?.count||0)}件</p>
-        <p class="text-xs text-gray-400 mt-1">${formatCurrency(activeTotal)}</p>
+        <p class="text-xs text-gray-400 mt-1">税抜 ${formatCurrency(activeExcl)}</p>
       </div>
       <div class="bg-white rounded-lg border border-gray-200 p-4">
-        <p class="text-xs text-gray-500">今年の入金済み</p>
+        <p class="text-xs text-gray-500">今年の入金済み<span class="text-[10px] text-gray-400 ml-1">税込</span></p>
         <p class="text-2xl font-bold text-green-600">${formatCurrency(receivedThisYear.total)}</p>
         <p class="text-xs text-gray-400 mt-1">${receivedThisYear.count}件</p>
       </div>
       <div class="bg-white rounded-lg border border-gray-200 p-4">
-        <p class="text-xs text-gray-500">今月入金予定</p>
+        <p class="text-xs text-gray-500">今月入金予定<span class="text-[10px] text-gray-400 ml-1">税込</span></p>
         <p class="text-2xl font-bold text-blue-600">${formatCurrency(paymentThisMonth.total)}</p>
         <p class="text-xs text-gray-400 mt-1">${paymentThisMonth.count}件</p>
       </div>
@@ -2776,27 +2829,31 @@ async function renderDealDashboard(main) {
 
     <!-- 粗利サマリー -->
     <div class="bg-white border border-gray-200 rounded-lg p-5 mb-6">
-      <h2 class="text-sm font-semibold text-gray-500 mb-3 uppercase tracking-wider"><i class="fas fa-calculator text-emerald-500 mr-1"></i>粗利サマリー</h2>
-      <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      <h2 class="text-sm font-semibold text-gray-500 mb-3 uppercase tracking-wider"><i class="fas fa-calculator text-emerald-500 mr-1"></i>粗利サマリー <span class="text-[10px] text-gray-400 font-normal ml-1">※粗利計算は全て税抜ベース</span></h2>
+      <div class="grid grid-cols-2 lg:grid-cols-5 gap-3">
         <div class="bg-gray-50 rounded-lg p-3 text-center">
           <p class="text-xs text-gray-500">対象案件数</p>
           <p class="text-xl font-bold text-gray-900">${profitSummary.total_deals}件</p>
         </div>
         <div class="bg-gray-50 rounded-lg p-3 text-center">
-          <p class="text-xs text-gray-500">売上合計</p>
-          <p class="text-xl font-bold text-indigo-600">${formatCurrency(profitSummary.total_revenue)}</p>
+          <p class="text-xs text-gray-500">売上合計<span class="text-[10px] text-gray-400 block">税抜</span></p>
+          <p class="text-xl font-bold text-indigo-600">${formatCurrency(profitSummary.total_revenue_excl)}</p>
+          <p class="text-[10px] text-gray-400">税込 ${formatCurrency(profitSummary.total_revenue_incl)}</p>
         </div>
         <div class="bg-gray-50 rounded-lg p-3 text-center">
-          <p class="text-xs text-gray-500">原価合計</p>
+          <p class="text-xs text-gray-500">原価合計<span class="text-[10px] text-gray-400 block">税抜</span></p>
           <p class="text-xl font-bold text-rose-600">${formatCurrency(profitSummary.total_cost)}</p>
         </div>
         <div class="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-center">
-          <p class="text-xs text-emerald-600">粗利合計</p>
+          <p class="text-xs text-emerald-600">粗利合計<span class="text-[10px] text-emerald-400 block">税抜</span></p>
           <p class="text-xl font-bold text-emerald-700">${formatCurrency(profitSummary.total_profit)}</p>
-          <p class="text-xs text-emerald-500 mt-0.5">平均粗利率: ${Math.round(profitSummary.avg_profit_rate * 100)}%</p>
+        </div>
+        <div class="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-center">
+          <p class="text-xs text-emerald-600">平均粗利率</p>
+          <p class="text-xl font-bold text-emerald-700">${Math.round(profitSummary.avg_profit_rate * 100)}%</p>
         </div>
       </div>
-      ${profitSummary.total_revenue > 0 ? `
+      ${profitSummary.total_revenue_excl > 0 ? `
         <div class="mt-3">
           <div class="flex rounded-full h-5 overflow-hidden bg-gray-200">
             <div class="bg-rose-400 flex items-center justify-center text-white text-xs font-medium" style="width:${Math.round((1 - profitSummary.avg_profit_rate) * 100)}%">
@@ -2824,13 +2881,13 @@ async function renderDealDashboard(main) {
               <div class="text-lg mb-1"><i class="fas ${info.icon} ${info.color.split(' ')[1]}"></i></div>
               <p class="text-xs text-gray-500">${info.label}</p>
               <p class="text-xl font-bold text-gray-900">${d.count}</p>
-              <p class="text-xs text-gray-400">${formatCurrency(d.total)}</p>
+              <p class="text-xs text-gray-400">${formatCurrency(d.total_excl)}<span class="text-[9px] text-gray-300 ml-0.5">税抜</span></p>
             </div>`;
         }).join('<div class="flex items-center text-gray-300"><i class="fas fa-chevron-right"></i></div>')}
       </div>
       ${pipelineData.lost?.count > 0 ? `
         <div class="mt-2 text-sm text-gray-500 flex items-center gap-2">
-          <i class="fas fa-times-circle text-gray-400"></i> 失注: ${pipelineData.lost.count}件（${formatCurrency(pipelineData.lost.total)}）
+          <i class="fas fa-times-circle text-gray-400"></i> 失注: ${pipelineData.lost.count}件（${formatCurrency(pipelineData.lost.total_excl)} 税抜）
         </div>
       ` : ''}
     </div>
@@ -2838,14 +2895,14 @@ async function renderDealDashboard(main) {
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
       <!-- 来月入金予定 -->
       <div class="bg-white border border-gray-200 rounded-lg p-5">
-        <h2 class="text-sm font-semibold text-gray-500 mb-3"><i class="fas fa-calendar-alt text-blue-500 mr-1"></i>来月入金予定</h2>
+        <h2 class="text-sm font-semibold text-gray-500 mb-3"><i class="fas fa-calendar-alt text-blue-500 mr-1"></i>来月入金予定 <span class="text-[10px] text-gray-400 font-normal">税込</span></h2>
         <p class="text-2xl font-bold text-blue-600">${formatCurrency(paymentNextMonth.total)}</p>
         <p class="text-sm text-gray-500">${paymentNextMonth.count}件</p>
       </div>
 
       <!-- 月別入金実績 -->
       <div class="bg-white border border-gray-200 rounded-lg p-5">
-        <h2 class="text-sm font-semibold text-gray-500 mb-3"><i class="fas fa-chart-bar text-green-500 mr-1"></i>月別入金実績</h2>
+        <h2 class="text-sm font-semibold text-gray-500 mb-3"><i class="fas fa-chart-bar text-green-500 mr-1"></i>月別入金実績 <span class="text-[10px] text-gray-400 font-normal">税込</span></h2>
         ${monthlyPayments.length === 0 ? '<p class="text-gray-400 text-sm">データなし</p>' : `
           <div class="space-y-2">
             ${monthlyPayments.slice(0, 6).map(m => {
@@ -2875,7 +2932,7 @@ async function renderDealDashboard(main) {
                onclick="navigate('admin-deal-detail',{id:'${c.id}'})">
             <div class="flex-1 min-w-0">
               <p class="font-medium text-sm">#${String(c.request_number).padStart(4,'0')} ${c.title}</p>
-              <p class="text-xs text-gray-500">${c.client_name} ・ ${formatCurrency(c.amount_with_tax)}</p>
+              <p class="text-xs text-gray-500">${c.client_name} ・ ${formatCurrency(c.contract_amount_excl_tax || c.amount)}<span class="text-[9px] text-gray-400 ml-0.5">税抜</span></p>
             </div>
             <div class="text-right flex-shrink-0">
               <p class="text-sm font-medium">${c.construction_start || '未定'}</p>
