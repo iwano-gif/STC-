@@ -119,7 +119,10 @@ function getPath(page, params = {}) {
     'admin-users': '/admin/users',
     'admin-approvers': '/admin/approvers',
     'admin-settings': '/admin/settings',
-    'admin-audit': '/admin/audit-logs'
+    'admin-audit': '/admin/audit-logs',
+    'admin-deals': '/admin/deals',
+    'admin-deal-detail': `/admin/deals/${params.id}`,
+    'deal-dashboard': '/admin/deal-dashboard'
   };
   return paths[page] || '/';
 }
@@ -290,6 +293,15 @@ function renderApp(app) {
               <a href="/admin/audit-logs" onclick="event.preventDefault();navigate('admin-audit')" class="sidebar-link ${state.currentPage==='admin-audit'?'active':''}">
                 <i class="fas fa-history w-5 text-center"></i><span>監査ログ</span>
               </a>
+              <div class="pt-3 mt-3 border-t border-gray-200">
+                <p class="px-3 py-1 text-xs font-semibold text-gray-400 uppercase">案件管理</p>
+              </div>
+              <a href="/admin/deal-dashboard" onclick="event.preventDefault();navigate('deal-dashboard')" class="sidebar-link ${state.currentPage==='deal-dashboard'?'active':''}">
+                <i class="fas fa-chart-line w-5 text-center"></i><span>案件ダッシュボード</span>
+              </a>
+              <a href="/admin/deals" onclick="event.preventDefault();navigate('admin-deals')" class="sidebar-link ${state.currentPage==='admin-deals'||state.currentPage==='admin-deal-detail'?'active':''}">
+                <i class="fas fa-project-diagram w-5 text-center"></i><span>案件一覧</span>
+              </a>
             ` : ''}
           </nav>
         </aside>
@@ -329,6 +341,9 @@ async function renderPageContent() {
       case 'admin-approvers': await renderAdminApprovers(main); break;
       case 'admin-settings': await renderAdminSettings(main); break;
       case 'admin-audit': await renderAuditLogs(main); break;
+      case 'admin-deals': await renderDealList(main); break;
+      case 'admin-deal-detail': await renderDealDetail(main); break;
+      case 'deal-dashboard': await renderDealDashboard(main); break;
       default: await renderDashboard(main);
     }
   } catch (err) {
@@ -2143,6 +2158,7 @@ async function renderAuditLogs(main) {
   
   const actionLabels = {
     request_created: '申請作成', request_resubmitted: '再申請', request_withdrawn: '取下げ', request_deleted: '申請削除',
+    deal_created: '案件登録', deal_updated: '案件更新', deal_deleted: '案件削除',
     step_approved: '承認', step_rejected: '差戻し', step_reassigned: '承認者振替',
     request_processed: '処理済み', user_invited: 'ユーザー招待', user_role_changed: 'ロール変更',
     user_deactivated: 'ユーザー無効化', user_reactivated: 'ユーザー有効化', user_deleted: 'ユーザー削除',
@@ -2192,6 +2208,399 @@ async function renderAuditLogs(main) {
         </div>
       ` : ''}
     `}`;
+}
+
+// ============================================================
+// DEAL TRACKING - 案件管理
+// ============================================================
+
+const DEAL_STATUS_MAP = {
+  estimate_approved: { label: '見積承認済', color: 'bg-blue-100 text-blue-700', icon: 'fa-file-alt' },
+  contracted: { label: '契約済み', color: 'bg-indigo-100 text-indigo-700', icon: 'fa-handshake' },
+  construction: { label: '工事中', color: 'bg-yellow-100 text-yellow-700', icon: 'fa-hard-hat' },
+  construction_done: { label: '工事完了', color: 'bg-orange-100 text-orange-700', icon: 'fa-check-circle' },
+  invoiced: { label: '請求済み', color: 'bg-purple-100 text-purple-700', icon: 'fa-file-invoice-dollar' },
+  payment_received: { label: '入金済み', color: 'bg-green-100 text-green-700', icon: 'fa-coins' },
+  lost: { label: '失注', color: 'bg-gray-100 text-gray-500', icon: 'fa-times-circle' }
+};
+
+function dealStatusBadge(status) {
+  const s = DEAL_STATUS_MAP[status] || { label: status, color: 'bg-gray-100 text-gray-600', icon: 'fa-question' };
+  return `<span class="badge ${s.color}"><i class="fas ${s.icon} mr-1"></i>${s.label}</span>`;
+}
+
+function dealStatusOptions(current) {
+  return Object.entries(DEAL_STATUS_MAP).map(([k,v]) =>
+    `<option value="${k}" ${k===current?'selected':''}>${v.label}</option>`
+  ).join('');
+}
+
+// ====== 案件一覧 ======
+async function renderDealList(main) {
+  const status = state.pageParams?.status || '';
+  const keyword = state.pageParams?.keyword || '';
+  const params = new URLSearchParams();
+  if (status) params.set('status', status);
+  if (keyword) params.set('keyword', keyword);
+
+  const data = await api(`/deals?${params}`);
+  const untracked = await api('/deals/untracked/estimates');
+
+  main.innerHTML = `
+    <div class="flex items-center justify-between mb-4">
+      <h1 class="text-xl font-bold text-gray-900"><i class="fas fa-project-diagram text-indigo-600 mr-2"></i>案件一覧</h1>
+    </div>
+
+    ${untracked.estimates.length > 0 ? `
+    <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+      <div class="flex items-center justify-between mb-2">
+        <h2 class="text-sm font-semibold text-blue-800"><i class="fas fa-plus-circle mr-1"></i>トラッキング未登録の承認済み見積もり（${untracked.estimates.length}件）</h2>
+      </div>
+      <div class="space-y-2">
+        ${untracked.estimates.map(e => `
+          <div class="flex items-center justify-between bg-white rounded-lg p-3 border border-blue-100">
+            <div class="flex-1 min-w-0">
+              <span class="text-xs font-mono text-gray-500">#${String(e.request_number).padStart(4,'0')}</span>
+              <span class="font-medium text-sm ml-2">${e.title}</span>
+              <span class="text-sm text-gray-500 ml-2">${e.client_name}</span>
+              <span class="text-sm font-medium ml-2">${formatCurrency(e.amount_with_tax)}</span>
+            </div>
+            <button onclick="startTracking('${e.id}')" class="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex-shrink-0">
+              <i class="fas fa-play mr-1"></i>追跡開始
+            </button>
+          </div>
+        `).join('')}
+      </div>
+    </div>` : ''}
+
+    <!-- Filters -->
+    <div class="flex flex-wrap gap-2 mb-4">
+      <select id="deal-filter-status" class="px-3 py-1.5 border border-gray-300 rounded-lg text-sm" onchange="applyDealFilters()">
+        <option value="">ステータス：すべて</option>
+        ${dealStatusOptions(status)}
+      </select>
+      <input type="text" id="deal-filter-keyword" placeholder="キーワード検索..." value="${keyword}"
+        class="px-3 py-1.5 border border-gray-300 rounded-lg text-sm w-48" onkeydown="if(event.key==='Enter')applyDealFilters()">
+      <button onclick="applyDealFilters()" class="px-3 py-1.5 text-sm border border-gray-300 rounded-lg hover:bg-gray-50"><i class="fas fa-search"></i></button>
+    </div>
+
+    ${data.deals.length === 0 ? `
+      <div class="bg-white border border-gray-200 rounded-lg p-12 text-center">
+        <i class="fas fa-project-diagram text-gray-300 text-3xl mb-3"></i>
+        <p class="text-gray-500">案件が登録されていません</p>
+      </div>
+    ` : `
+      <div class="bg-white border border-gray-200 rounded-lg overflow-hidden">
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead class="bg-gray-50 border-b border-gray-200">
+              <tr>
+                <th class="px-4 py-3 text-left font-medium text-gray-500">#</th>
+                <th class="px-4 py-3 text-left font-medium text-gray-500">件名</th>
+                <th class="px-4 py-3 text-left font-medium text-gray-500">取引先</th>
+                <th class="px-4 py-3 text-right font-medium text-gray-500">見積金額</th>
+                <th class="px-4 py-3 text-right font-medium text-gray-500">契約金額</th>
+                <th class="px-4 py-3 text-center font-medium text-gray-500">ステータス</th>
+                <th class="px-4 py-3 text-left font-medium text-gray-500">入金期限</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-100">
+              ${data.deals.map(d => `
+                <tr class="hover:bg-gray-50 cursor-pointer" onclick="navigate('admin-deal-detail',{id:'${d.id}'})">
+                  <td class="px-4 py-3 font-mono text-gray-500">${String(d.request_number).padStart(4,'0')}</td>
+                  <td class="px-4 py-3 font-medium max-w-[200px] truncate">${d.title}</td>
+                  <td class="px-4 py-3 text-gray-600 max-w-[150px] truncate">${d.client_name}</td>
+                  <td class="px-4 py-3 text-right">${formatCurrency(d.amount_with_tax)}</td>
+                  <td class="px-4 py-3 text-right font-medium">${d.contract_amount ? formatCurrency(d.contract_amount) : '-'}</td>
+                  <td class="px-4 py-3 text-center">${dealStatusBadge(d.deal_status)}</td>
+                  <td class="px-4 py-3 text-gray-500 text-xs">${d.payment_due_date || '-'}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `}`;
+}
+
+function applyDealFilters() {
+  navigate('admin-deals', {
+    status: document.getElementById('deal-filter-status').value,
+    keyword: document.getElementById('deal-filter-keyword').value
+  });
+}
+
+async function startTracking(requestId) {
+  try {
+    await api('/deals/create', { method: 'POST', body: JSON.stringify({ requestId }) });
+    showToast('案件トラッキングを開始しました');
+    renderPageContent();
+  } catch (err) { showToast(err.message, 'error'); }
+}
+
+// ====== 案件詳細・編集 ======
+async function renderDealDetail(main) {
+  const id = state.pageParams?.id;
+  if (!id) { navigate('admin-deals'); return; }
+
+  const data = await api(`/deals/${id}`);
+  const d = data.deal;
+
+  main.innerHTML = `
+    <div class="flex items-center gap-3 mb-4">
+      <button onclick="navigate('admin-deals')" class="text-gray-500 hover:text-gray-700"><i class="fas fa-arrow-left"></i></button>
+      <h1 class="text-xl font-bold text-gray-900">案件詳細 #${String(d.request_number).padStart(4,'0')}</h1>
+      ${dealStatusBadge(d.deal_status)}
+    </div>
+
+    <!-- 元の見積もり情報 -->
+    <div class="bg-white border border-gray-200 rounded-lg p-5 mb-4">
+      <h2 class="text-sm font-semibold text-gray-500 mb-3 uppercase tracking-wider">見積もり情報</h2>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-y-3 gap-x-6 text-sm">
+        <div><span class="text-gray-500">件名</span><p class="font-medium">${d.title}</p></div>
+        <div><span class="text-gray-500">取引先</span><p class="font-medium">${d.client_name}</p></div>
+        <div><span class="text-gray-500">見積金額（税込）</span><p class="font-medium text-lg">${formatCurrency(d.amount_with_tax)}</p></div>
+        <div><span class="text-gray-500">申請者</span><p class="font-medium">${d.applicant_name}</p></div>
+        <div><span class="text-gray-500">見積日</span><p class="font-medium">${formatDate(d.request_date)}</p></div>
+        ${d.remarks ? `<div class="sm:col-span-2"><span class="text-gray-500">備考</span><p class="font-medium">${d.remarks}</p></div>` : ''}
+      </div>
+    </div>
+
+    <!-- 案件進捗管理フォーム -->
+    <form id="deal-form" class="space-y-4">
+      <div class="bg-white border border-gray-200 rounded-lg p-5">
+        <h2 class="text-sm font-semibold text-gray-500 mb-4 uppercase tracking-wider">案件進捗</h2>
+        
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">ステータス</label>
+            <select id="deal-status" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+              ${dealStatusOptions(d.deal_status)}
+            </select>
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">メモ</label>
+            <input type="text" id="deal-notes" value="${d.notes || ''}" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" placeholder="メモ">
+          </div>
+        </div>
+      </div>
+
+      <div class="bg-white border border-gray-200 rounded-lg p-5">
+        <h2 class="text-sm font-semibold text-indigo-600 mb-4"><i class="fas fa-handshake mr-1"></i>契約情報</h2>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">契約日</label>
+            <input type="date" id="deal-contract-date" value="${d.contract_date || ''}" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">契約金額（税込）</label>
+            <input type="number" id="deal-contract-amount" value="${d.contract_amount || ''}" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" placeholder="0">
+          </div>
+        </div>
+      </div>
+
+      <div class="bg-white border border-gray-200 rounded-lg p-5">
+        <h2 class="text-sm font-semibold text-yellow-600 mb-4"><i class="fas fa-hard-hat mr-1"></i>工事情報</h2>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">工事開始日</label>
+            <input type="date" id="deal-construction-start" value="${d.construction_start || ''}" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">工事完了日</label>
+            <input type="date" id="deal-construction-end" value="${d.construction_end || ''}" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+          </div>
+        </div>
+      </div>
+
+      <div class="bg-white border border-gray-200 rounded-lg p-5">
+        <h2 class="text-sm font-semibold text-purple-600 mb-4"><i class="fas fa-file-invoice-dollar mr-1"></i>請求・入金情報</h2>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">請求日</label>
+            <input type="date" id="deal-invoice-date" value="${d.invoice_date || ''}" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">請求金額（税込）</label>
+            <input type="number" id="deal-invoice-amount" value="${d.invoice_amount || ''}" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" placeholder="0">
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">入金期限</label>
+            <input type="date" id="deal-payment-due" value="${d.payment_due_date || ''}" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">入金日</label>
+            <input type="date" id="deal-payment-date" value="${d.payment_date || ''}" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">入金額</label>
+            <input type="number" id="deal-payment-amount" value="${d.payment_amount || ''}" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" placeholder="0">
+          </div>
+        </div>
+      </div>
+
+      <div class="flex gap-3">
+        <button type="submit" class="px-6 py-2.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">
+          <i class="fas fa-save mr-1"></i>保存
+        </button>
+        <button type="button" onclick="navigate('admin-deals')" class="px-4 py-2.5 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">
+          キャンセル
+        </button>
+        <button type="button" onclick="deleteDeal('${d.id}')" class="px-4 py-2.5 text-sm border border-red-300 text-red-600 rounded-lg hover:bg-red-50 ml-auto">
+          <i class="fas fa-trash mr-1"></i>削除
+        </button>
+      </div>
+    </form>`;
+
+  document.getElementById('deal-form').onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      await api(`/deals/${id}/update`, { method: 'POST', body: JSON.stringify({
+        deal_status: document.getElementById('deal-status').value,
+        contract_date: document.getElementById('deal-contract-date').value || null,
+        contract_amount: parseFloat(document.getElementById('deal-contract-amount').value) || null,
+        construction_start: document.getElementById('deal-construction-start').value || null,
+        construction_end: document.getElementById('deal-construction-end').value || null,
+        invoice_date: document.getElementById('deal-invoice-date').value || null,
+        invoice_amount: parseFloat(document.getElementById('deal-invoice-amount').value) || null,
+        payment_due_date: document.getElementById('deal-payment-due').value || null,
+        payment_date: document.getElementById('deal-payment-date').value || null,
+        payment_amount: parseFloat(document.getElementById('deal-payment-amount').value) || null,
+        notes: document.getElementById('deal-notes').value || null
+      })});
+      showToast('案件情報を更新しました');
+      renderPageContent();
+    } catch (err) { showToast(err.message, 'error'); }
+  };
+}
+
+async function deleteDeal(dealId) {
+  showConfirm('この案件トラッキングを削除しますか？（元の見積もり申請は残ります）', async () => {
+    try {
+      await api(`/deals/${dealId}/delete`, { method: 'POST' });
+      showToast('案件トラッキングを削除しました');
+      navigate('admin-deals');
+    } catch (err) { showToast(err.message, 'error'); }
+  });
+}
+
+// ====== 案件ダッシュボード ======
+async function renderDealDashboard(main) {
+  const data = await api('/deals/dashboard/summary');
+  const { pipeline, paymentThisMonth, paymentNextMonth, overdue, receivedThisYear, monthlyPayments, upcomingConstruction } = data;
+
+  // パイプラインデータ整理
+  const pipelineOrder = ['estimate_approved','contracted','construction','construction_done','invoiced','payment_received','lost'];
+  const pipelineData = {};
+  pipelineOrder.forEach(s => { pipelineData[s] = { count: 0, total: 0 }; });
+  pipeline.forEach(p => { pipelineData[p.deal_status] = { count: p.count, total: p.total || 0 }; });
+
+  const totalDeals = pipeline.reduce((s, p) => s + p.count, 0);
+  const activeTotal = pipeline.filter(p => p.deal_status !== 'lost' && p.deal_status !== 'payment_received')
+                              .reduce((s, p) => s + (p.total || 0), 0);
+
+  main.innerHTML = `
+    <h1 class="text-xl font-bold text-gray-900 mb-4"><i class="fas fa-chart-line text-indigo-600 mr-2"></i>案件ダッシュボード</h1>
+
+    <!-- サマリーカード -->
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+      <div class="bg-white rounded-lg border border-gray-200 p-4">
+        <p class="text-xs text-gray-500">進行中案件</p>
+        <p class="text-2xl font-bold text-indigo-600">${totalDeals - (pipelineData.payment_received?.count||0) - (pipelineData.lost?.count||0)}件</p>
+        <p class="text-xs text-gray-400 mt-1">${formatCurrency(activeTotal)}</p>
+      </div>
+      <div class="bg-white rounded-lg border border-gray-200 p-4">
+        <p class="text-xs text-gray-500">今年の入金済み</p>
+        <p class="text-2xl font-bold text-green-600">${formatCurrency(receivedThisYear.total)}</p>
+        <p class="text-xs text-gray-400 mt-1">${receivedThisYear.count}件</p>
+      </div>
+      <div class="bg-white rounded-lg border border-gray-200 p-4">
+        <p class="text-xs text-gray-500">今月入金予定</p>
+        <p class="text-2xl font-bold text-blue-600">${formatCurrency(paymentThisMonth.total)}</p>
+        <p class="text-xs text-gray-400 mt-1">${paymentThisMonth.count}件</p>
+      </div>
+      <div class="bg-white rounded-lg border ${overdue.count > 0 ? 'border-red-200 bg-red-50' : 'border-gray-200'} p-4">
+        <p class="text-xs ${overdue.count > 0 ? 'text-red-600' : 'text-gray-500'}">入金遅延</p>
+        <p class="text-2xl font-bold ${overdue.count > 0 ? 'text-red-600' : 'text-gray-400'}">${overdue.count}件</p>
+        <p class="text-xs ${overdue.count > 0 ? 'text-red-500' : 'text-gray-400'} mt-1">${formatCurrency(overdue.total)}</p>
+      </div>
+    </div>
+
+    <!-- パイプライン -->
+    <div class="bg-white border border-gray-200 rounded-lg p-5 mb-6">
+      <h2 class="text-sm font-semibold text-gray-500 mb-4 uppercase tracking-wider">パイプライン</h2>
+      <div class="flex flex-wrap gap-2 mb-4">
+        ${pipelineOrder.filter(s => s !== 'lost').map(s => {
+          const info = DEAL_STATUS_MAP[s];
+          const d = pipelineData[s];
+          const pct = totalDeals > 0 ? Math.round(d.count / totalDeals * 100) : 0;
+          return `
+            <div class="flex-1 min-w-[120px] bg-gray-50 rounded-lg p-3 text-center border border-gray-100 cursor-pointer hover:shadow-sm"
+                 onclick="navigate('admin-deals',{status:'${s}'})">
+              <div class="text-lg mb-1"><i class="fas ${info.icon} ${info.color.split(' ')[1]}"></i></div>
+              <p class="text-xs text-gray-500">${info.label}</p>
+              <p class="text-xl font-bold text-gray-900">${d.count}</p>
+              <p class="text-xs text-gray-400">${formatCurrency(d.total)}</p>
+            </div>`;
+        }).join('<div class="flex items-center text-gray-300"><i class="fas fa-chevron-right"></i></div>')}
+      </div>
+      ${pipelineData.lost?.count > 0 ? `
+        <div class="mt-2 text-sm text-gray-500 flex items-center gap-2">
+          <i class="fas fa-times-circle text-gray-400"></i> 失注: ${pipelineData.lost.count}件（${formatCurrency(pipelineData.lost.total)}）
+        </div>
+      ` : ''}
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
+      <!-- 来月入金予定 -->
+      <div class="bg-white border border-gray-200 rounded-lg p-5">
+        <h2 class="text-sm font-semibold text-gray-500 mb-3"><i class="fas fa-calendar-alt text-blue-500 mr-1"></i>来月入金予定</h2>
+        <p class="text-2xl font-bold text-blue-600">${formatCurrency(paymentNextMonth.total)}</p>
+        <p class="text-sm text-gray-500">${paymentNextMonth.count}件</p>
+      </div>
+
+      <!-- 月別入金実績 -->
+      <div class="bg-white border border-gray-200 rounded-lg p-5">
+        <h2 class="text-sm font-semibold text-gray-500 mb-3"><i class="fas fa-chart-bar text-green-500 mr-1"></i>月別入金実績</h2>
+        ${monthlyPayments.length === 0 ? '<p class="text-gray-400 text-sm">データなし</p>' : `
+          <div class="space-y-2">
+            ${monthlyPayments.slice(0, 6).map(m => {
+              const maxTotal = Math.max(...monthlyPayments.map(x => x.total));
+              const barWidth = maxTotal > 0 ? Math.round(m.total / maxTotal * 100) : 0;
+              return `
+                <div class="flex items-center gap-2 text-sm">
+                  <span class="w-16 text-gray-500 text-xs">${m.month}</span>
+                  <div class="flex-1 bg-gray-100 rounded-full h-5 relative">
+                    <div class="bg-green-500 rounded-full h-5" style="width:${barWidth}%"></div>
+                  </div>
+                  <span class="w-24 text-right font-medium text-xs">${formatCurrency(m.total)}</span>
+                </div>`;
+            }).join('')}
+          </div>
+        `}
+      </div>
+    </div>
+
+    <!-- 工事予定 -->
+    ${upcomingConstruction.length > 0 ? `
+    <div class="bg-white border border-gray-200 rounded-lg p-5">
+      <h2 class="text-sm font-semibold text-gray-500 mb-3"><i class="fas fa-hard-hat text-yellow-500 mr-1"></i>工事予定</h2>
+      <div class="space-y-2">
+        ${upcomingConstruction.map(c => `
+          <div class="flex items-center gap-3 p-3 bg-gray-50 rounded-lg cursor-pointer hover:bg-gray-100"
+               onclick="navigate('admin-deal-detail',{id:'${c.id}'})">
+            <div class="flex-1 min-w-0">
+              <p class="font-medium text-sm">#${String(c.request_number).padStart(4,'0')} ${c.title}</p>
+              <p class="text-xs text-gray-500">${c.client_name} ・ ${formatCurrency(c.amount_with_tax)}</p>
+            </div>
+            <div class="text-right flex-shrink-0">
+              <p class="text-sm font-medium">${c.construction_start || '未定'}</p>
+              <p class="text-xs text-gray-400">${dealStatusBadge(c.deal_status)}</p>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    </div>` : ''}`;
 }
 
 // ============================================================
