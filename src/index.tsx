@@ -17,6 +17,15 @@ const app = new Hono<{ Bindings: Bindings }>()
 
 app.use('*', cors())
 
+// グローバルエラーハンドラ: 全APIエラーをJSON形式で返す
+app.onError((err, c) => {
+  console.error('Unhandled error:', err.message, err.stack)
+  if (c.req.path.startsWith('/api/')) {
+    return c.json({ error: err.message || 'サーバーエラーが発生しました' }, 500)
+  }
+  return c.html(renderPage())
+})
+
 // API routes
 app.route('/api/auth', authRoutes)
 app.route('/api/requests', requestRoutes)

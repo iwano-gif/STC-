@@ -21,15 +21,32 @@ async function api(path, options = {}) {
     headers['Content-Type'] = 'application/json';
   }
   
+  let res;
   try {
-    const res = await fetch(`/api${path}`, { ...options, headers: { ...headers, ...options.headers } });
+    res = await fetch(`/api${path}`, { ...options, headers: { ...headers, ...options.headers } });
+  } catch (networkErr) {
+    throw new Error('ネットワークエラー: サーバーに接続できません');
+  }
+
+  try {
     if (res.headers.get('Content-Type')?.includes('text/csv')) return res;
     const contentType = res.headers.get('Content-Type') || '';
-    if (!contentType.includes('application/json')) {
-      const text = await res.text();
-      throw new Error(res.ok ? text : `サーバーエラー (${res.status}): ${text.substring(0, 100)}`);
+    
+    // テキストとして読み取り
+    const text = await res.text();
+    
+    // JSONパースを試行
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch (parseErr) {
+      // JSONでないレスポンスの場合
+      if (!res.ok) {
+        throw new Error(`サーバーエラー (${res.status}): ${text.substring(0, 200)}`);
+      }
+      throw new Error(`レスポンスの解析に失敗しました: ${text.substring(0, 200)}`);
     }
-    const data = await res.json();
+    
     if (!res.ok) throw new Error(data.error || 'エラーが発生しました');
     return data;
   } catch (e) {
