@@ -58,7 +58,6 @@ dealRoutes.get('/', async (c) => {
   ).bind(...params).all()
 
   // 各案件の入金合計を取得
-  const dealIds = (deals.results as any[]).map(d => d.id)
   const paymentsMap: Record<string, { received: number; expected: number }> = {}
   for (const deal of deals.results as any[]) {
     const payments = await c.env.DB.prepare(
@@ -73,213 +72,9 @@ dealRoutes.get('/', async (c) => {
   return c.json({ deals: deals.results, paymentsMap })
 })
 
-// ====== 案件詳細（管理者・承認者） ======
-dealRoutes.get('/:id', async (c) => {
-  const user = await getAdminOrApprover(c)
-  if (!user) return c.json({ error: '権限が必要です' }, 403)
+// ====== リテラルGETルートを /:id より前に配置 ======
 
-  const id = c.req.param('id')
-  const deal = await c.env.DB.prepare(
-    `SELECT d.*, r.request_number, r.type, r.title, r.client_name,
-            r.amount, r.tax_rate, r.amount_with_tax, r.gross_profit_rate, r.created_at as request_date, r.remarks,
-            p.display_name as applicant_name
-     FROM deal_tracking d
-     JOIN requests r ON d.request_id = r.id
-     JOIN profiles p ON r.applicant_id = p.id
-     WHERE d.id = ?`
-  ).bind(id).first()
-
-  if (!deal) return c.json({ error: '案件が見つかりません' }, 404)
-
-  // 分割入金一覧
-  const payments = await c.env.DB.prepare(
-    'SELECT * FROM deal_payments WHERE deal_id = ? ORDER BY expected_date ASC, created_at ASC'
-  ).bind(id).all()
-
-  return c.json({ deal, payments: payments.results })
-})
-
-// ====== 案件トラッキング開始 ======
-dealRoutes.post('/create', async (c) => {
-  const admin = await getAdminUser(c)
-  if (!admin) return c.json({ error: '管理者権限が必要です' }, 403)
-
-  const { requestId } = await c.req.json()
-  if (!requestId) return c.json({ error: 'リクエストIDが必要です' }, 400)
-
-  const request = await c.env.DB.prepare(
-    "SELECT * FROM requests WHERE id = ? AND type = 'estimate' AND status IN ('completed','processed')"
-  ).bind(requestId).first()
-
-  if (!request) return c.json({ error: '承認済みの見積もり申請が見つかりません' }, 404)
-
-  const existing = await c.env.DB.prepare(
-    'SELECT id FROM deal_tracking WHERE request_id = ?'
-  ).bind(requestId).first()
-  if (existing) return c.json({ error: 'この申請の案件トラッキングは既に存在します' }, 400)
-
-  const id = generateId()
-  await c.env.DB.prepare(
-    `INSERT INTO deal_tracking (id, request_id, deal_status) VALUES (?, ?, 'estimate_approved')`
-  ).bind(id, requestId).run()
-
-  await c.env.DB.prepare(
-    `INSERT INTO audit_logs (id, user_id, action, target_table, target_id, detail)
-     VALUES (?, ?, 'deal_created', 'deal_tracking', ?, ?)`
-  ).bind(generateId(), admin.userId, id, JSON.stringify({ request_id: requestId })).run()
-
-  return c.json({ id, message: '案件トラッキングを開始しました' })
-})
-
-// ====== 案件ステータス更新（利益率・原価含む） ======
-dealRoutes.post('/:id/update', async (c) => {
-  const admin = await getAdminUser(c)
-  if (!admin) return c.json({ error: '管理者権限が必要です' }, 403)
-
-  const id = c.req.param('id')
-  const body = await c.req.json()
-  const {
-    deal_status, contract_date, contract_amount, contract_amount_excl_tax, contract_tax_rate,
-    construction_start, construction_end,
-    cost_amount, profit_rate,
-    notes
-  } = body
-
-  const deal = await c.env.DB.prepare('SELECT * FROM deal_tracking WHERE id = ?').bind(id).first()
-  if (!deal) return c.json({ error: '案件が見つかりません' }, 404)
-
-  await c.env.DB.prepare(
-    `UPDATE deal_tracking SET
-      deal_status = COALESCE(?, deal_status),
-      contract_date = COALESCE(?, contract_date),
-      contract_amount = COALESCE(?, contract_amount),
-      contract_amount_excl_tax = COALESCE(?, contract_amount_excl_tax),
-      contract_tax_rate = COALESCE(?, contract_tax_rate),
-      construction_start = COALESCE(?, construction_start),
-      construction_end = COALESCE(?, construction_end),
-      cost_amount = COALESCE(?, cost_amount),
-      profit_rate = COALESCE(?, profit_rate),
-      notes = COALESCE(?, notes),
-      updated_at = datetime('now')
-    WHERE id = ?`
-  ).bind(
-    deal_status || null, contract_date || null, contract_amount || null,
-    contract_amount_excl_tax !== undefined && contract_amount_excl_tax !== '' ? contract_amount_excl_tax : null,
-    contract_tax_rate !== undefined && contract_tax_rate !== '' ? contract_tax_rate : null,
-    construction_start || null, construction_end || null,
-    cost_amount !== undefined && cost_amount !== '' ? cost_amount : null,
-    profit_rate !== undefined && profit_rate !== '' ? profit_rate : null,
-    notes !== undefined ? notes : null,
-    id
-  ).run()
-
-  await c.env.DB.prepare(
-    `INSERT INTO audit_logs (id, user_id, action, target_table, target_id, detail)
-     VALUES (?, ?, 'deal_updated', 'deal_tracking', ?, ?)`
-  ).bind(generateId(), admin.userId, id, JSON.stringify({
-    old_status: deal.deal_status, new_status: deal_status || deal.deal_status, ...body
-  })).run()
-
-  return c.json({ message: '案件情報を更新しました' })
-})
-
-// ====== 案件削除 ======
-dealRoutes.post('/:id/delete', async (c) => {
-  const admin = await getAdminUser(c)
-  if (!admin) return c.json({ error: '管理者権限が必要です' }, 403)
-
-  const id = c.req.param('id')
-  await c.env.DB.prepare('DELETE FROM deal_payments WHERE deal_id = ?').bind(id).run()
-  await c.env.DB.prepare('DELETE FROM deal_tracking WHERE id = ?').bind(id).run()
-
-  await c.env.DB.prepare(
-    `INSERT INTO audit_logs (id, user_id, action, target_table, target_id)
-     VALUES (?, ?, 'deal_deleted', 'deal_tracking', ?)`
-  ).bind(generateId(), admin.userId, id).run()
-
-  return c.json({ message: '案件トラッキングを削除しました' })
-})
-
-// ====== 分割入金 CRUD ======
-
-// 入金追加
-dealRoutes.post('/:id/payments', async (c) => {
-  const admin = await getAdminUser(c)
-  if (!admin) return c.json({ error: '管理者権限が必要です' }, 403)
-
-  const dealId = c.req.param('id')
-  const deal = await c.env.DB.prepare('SELECT id FROM deal_tracking WHERE id = ?').bind(dealId).first()
-  if (!deal) return c.json({ error: '案件が見つかりません' }, 404)
-
-  const { payment_type, label, expected_amount, expected_date, actual_amount, actual_date, invoice_date, notes } = await c.req.json()
-
-  if (!payment_type || !label) return c.json({ error: '入金種別とラベルは必須です' }, 400)
-
-  const id = generateId()
-  await c.env.DB.prepare(
-    `INSERT INTO deal_payments (id, deal_id, payment_type, label, expected_amount, expected_date, actual_amount, actual_date, invoice_date, notes)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).bind(id, dealId, payment_type, label,
-    expected_amount || null, expected_date || null,
-    actual_amount || null, actual_date || null,
-    invoice_date || null, notes || null
-  ).run()
-
-  await c.env.DB.prepare(
-    `INSERT INTO audit_logs (id, user_id, action, target_table, target_id, detail)
-     VALUES (?, ?, 'payment_added', 'deal_payments', ?, ?)`
-  ).bind(generateId(), admin.userId, id, JSON.stringify({ deal_id: dealId, label, payment_type })).run()
-
-  return c.json({ id, message: '入金情報を追加しました' })
-})
-
-// 入金更新
-dealRoutes.post('/:id/payments/:paymentId/update', async (c) => {
-  const admin = await getAdminUser(c)
-  if (!admin) return c.json({ error: '管理者権限が必要です' }, 403)
-
-  const paymentId = c.req.param('paymentId')
-  const body = await c.req.json()
-  const { payment_type, label, expected_amount, expected_date, actual_amount, actual_date, invoice_date, notes } = body
-
-  await c.env.DB.prepare(
-    `UPDATE deal_payments SET
-      payment_type = COALESCE(?, payment_type),
-      label = COALESCE(?, label),
-      expected_amount = ?,
-      expected_date = ?,
-      actual_amount = ?,
-      actual_date = ?,
-      invoice_date = ?,
-      notes = ?,
-      updated_at = datetime('now')
-    WHERE id = ?`
-  ).bind(
-    payment_type || null, label || null,
-    expected_amount !== undefined ? (expected_amount || null) : null,
-    expected_date || null,
-    actual_amount !== undefined ? (actual_amount || null) : null,
-    actual_date || null,
-    invoice_date || null,
-    notes !== undefined ? (notes || null) : null,
-    paymentId
-  ).run()
-
-  return c.json({ message: '入金情報を更新しました' })
-})
-
-// 入金削除
-dealRoutes.post('/:id/payments/:paymentId/delete', async (c) => {
-  const admin = await getAdminUser(c)
-  if (!admin) return c.json({ error: '管理者権限が必要です' }, 403)
-
-  const paymentId = c.req.param('paymentId')
-  await c.env.DB.prepare('DELETE FROM deal_payments WHERE id = ?').bind(paymentId).run()
-
-  return c.json({ message: '入金情報を削除しました' })
-})
-
-// ====== トラッキング未登録の承認済み見積もり一覧（管理者・承認者） ======
+// トラッキング未登録の承認済み見積もり一覧（管理者・承認者）
 dealRoutes.get('/untracked/estimates', async (c) => {
   const user = await getAdminOrApprover(c)
   if (!user) return c.json({ error: '権限が必要です' }, 403)
@@ -296,90 +91,7 @@ dealRoutes.get('/untracked/estimates', async (c) => {
   return c.json({ estimates: estimates.results })
 })
 
-// ====== 工事決定確定（承認者が契約確定を押す） ======
-dealRoutes.post('/:id/confirm-contract', async (c) => {
-  const user = await getAdminOrApprover(c)
-  if (!user) return c.json({ error: '権限が必要です' }, 403)
-
-  const id = c.req.param('id')
-  const deal = await c.env.DB.prepare('SELECT * FROM deal_tracking WHERE id = ?').bind(id).first()
-  if (!deal) return c.json({ error: '案件が見つかりません' }, 404)
-
-  if (deal.deal_status !== 'estimate_approved') {
-    return c.json({ error: 'この案件は既に工事決定済みまたは別のステータスです' }, 400)
-  }
-
-  await c.env.DB.prepare(
-    `UPDATE deal_tracking SET deal_status = 'contracted', updated_at = datetime('now') WHERE id = ?`
-  ).bind(id).run()
-
-  await c.env.DB.prepare(
-    `INSERT INTO audit_logs (id, user_id, action, target_table, target_id, detail)
-     VALUES (?, ?, 'deal_contract_confirmed', 'deal_tracking', ?, ?)`
-  ).bind(generateId(), user.userId, id, JSON.stringify({
-    confirmed_by: user.displayName || user.userId,
-    old_status: 'estimate_approved',
-    new_status: 'contracted'
-  })).run()
-
-  return c.json({ message: '工事決定を確定しました' })
-})
-
-// ====== 見積もりから直接工事決定（トラッキング未登録の承認済み見積もりを一括処理） ======
-dealRoutes.post('/confirm-from-estimate/:requestId', async (c) => {
-  const user = await getAdminOrApprover(c)
-  if (!user) return c.json({ error: '権限が必要です' }, 403)
-
-  const requestId = c.req.param('requestId')
-
-  // 承認済み見積もりか確認
-  const request = await c.env.DB.prepare(
-    "SELECT * FROM requests WHERE id = ? AND type = 'estimate' AND status IN ('completed','processed')"
-  ).bind(requestId).first()
-  if (!request) return c.json({ error: '承認済みの見積もり申請が見つかりません' }, 404)
-
-  // 既にトラッキング済みか確認
-  const existing = await c.env.DB.prepare(
-    'SELECT id, deal_status FROM deal_tracking WHERE request_id = ?'
-  ).bind(requestId).first()
-
-  if (existing) {
-    if (existing.deal_status === 'estimate_approved') {
-      // トラッキング済みだがまだ estimate_approved → contracted に変更
-      await c.env.DB.prepare(
-        `UPDATE deal_tracking SET deal_status = 'contracted', updated_at = datetime('now') WHERE id = ?`
-      ).bind(existing.id).run()
-      await c.env.DB.prepare(
-        `INSERT INTO audit_logs (id, user_id, action, target_table, target_id, detail)
-         VALUES (?, ?, 'deal_contract_confirmed', 'deal_tracking', ?, ?)`
-      ).bind(generateId(), user.userId, existing.id, JSON.stringify({
-        confirmed_by: user.displayName || user.userId,
-        old_status: 'estimate_approved', new_status: 'contracted'
-      })).run()
-      return c.json({ id: existing.id, message: '工事決定を確定しました' })
-    }
-    return c.json({ error: 'この案件は既に工事決定済みまたは別のステータスです' }, 400)
-  }
-
-  // 未トラッキング → 新規作成して即 contracted に
-  const id = generateId()
-  await c.env.DB.prepare(
-    `INSERT INTO deal_tracking (id, request_id, deal_status) VALUES (?, ?, 'contracted')`
-  ).bind(id, requestId).run()
-
-  await c.env.DB.prepare(
-    `INSERT INTO audit_logs (id, user_id, action, target_table, target_id, detail)
-     VALUES (?, ?, 'deal_confirmed_from_estimate', 'deal_tracking', ?, ?)`
-  ).bind(generateId(), user.userId, id, JSON.stringify({
-    request_id: requestId,
-    confirmed_by: user.displayName || user.userId,
-    status: 'contracted'
-  })).run()
-
-  return c.json({ id, message: '工事決定を確定しました' })
-})
-
-// ====== ダッシュボード集計（管理者・承認者） ======
+// ダッシュボード集計（管理者・承認者）
 dealRoutes.get('/dashboard/summary', async (c) => {
   const user = await getAdminOrApprover(c)
   if (!user) return c.json({ error: '権限が必要です' }, 403)
@@ -485,4 +197,375 @@ dealRoutes.get('/dashboard/summary', async (c) => {
     },
     upcomingConstruction: upcomingConstruction.results
   })
+})
+
+// ====== 案件詳細（管理者・承認者） ======
+dealRoutes.get('/:id', async (c) => {
+  const user = await getAdminOrApprover(c)
+  if (!user) return c.json({ error: '権限が必要です' }, 403)
+
+  const id = c.req.param('id')
+  const deal = await c.env.DB.prepare(
+    `SELECT d.*, r.request_number, r.type, r.title, r.client_name,
+            r.amount, r.tax_rate, r.amount_with_tax, r.gross_profit_rate, r.created_at as request_date, r.remarks,
+            p.display_name as applicant_name
+     FROM deal_tracking d
+     JOIN requests r ON d.request_id = r.id
+     JOIN profiles p ON r.applicant_id = p.id
+     WHERE d.id = ?`
+  ).bind(id).first()
+
+  if (!deal) return c.json({ error: '案件が見つかりません' }, 404)
+
+  // 分割入金一覧
+  const payments = await c.env.DB.prepare(
+    'SELECT * FROM deal_payments WHERE deal_id = ? ORDER BY expected_date ASC, created_at ASC'
+  ).bind(id).all()
+
+  return c.json({ deal, payments: payments.results })
+})
+
+// ====== リテラルPOSTルートを /:id/* より前に配置 ======
+
+// 案件トラッキング開始
+dealRoutes.post('/create', async (c) => {
+  const admin = await getAdminUser(c)
+  if (!admin) return c.json({ error: '管理者権限が必要です' }, 403)
+
+  const { requestId } = await c.req.json()
+  if (!requestId) return c.json({ error: 'リクエストIDが必要です' }, 400)
+
+  const request = await c.env.DB.prepare(
+    "SELECT * FROM requests WHERE id = ? AND type = 'estimate' AND status IN ('completed','processed')"
+  ).bind(requestId).first()
+
+  if (!request) return c.json({ error: '承認済みの見積もり申請が見つかりません' }, 404)
+
+  const existing = await c.env.DB.prepare(
+    'SELECT id FROM deal_tracking WHERE request_id = ?'
+  ).bind(requestId).first()
+  if (existing) return c.json({ error: 'この申請の案件トラッキングは既に存在します' }, 400)
+
+  const id = generateId()
+  await c.env.DB.prepare(
+    `INSERT INTO deal_tracking (id, request_id, deal_status) VALUES (?, ?, 'estimate_approved')`
+  ).bind(id, requestId).run()
+
+  await c.env.DB.prepare(
+    `INSERT INTO audit_logs (id, user_id, action, target_table, target_id, detail)
+     VALUES (?, ?, 'deal_created', 'deal_tracking', ?, ?)`
+  ).bind(generateId(), admin.userId, id, JSON.stringify({ request_id: requestId })).run()
+
+  return c.json({ id, message: '案件トラッキングを開始しました' })
+})
+
+// 見積もりから直接工事決定（トラッキング未登録の承認済み見積もりを一括処理）
+dealRoutes.post('/confirm-from-estimate/:requestId', async (c) => {
+  const user = await getAdminOrApprover(c)
+  if (!user) return c.json({ error: '権限が必要です' }, 403)
+
+  const requestId = c.req.param('requestId')
+
+  // 承認済み見積もりか確認
+  const request = await c.env.DB.prepare(
+    "SELECT * FROM requests WHERE id = ? AND type = 'estimate' AND status IN ('completed','processed')"
+  ).bind(requestId).first()
+  if (!request) return c.json({ error: '承認済みの見積もり申請が見つかりません' }, 404)
+
+  // 既にトラッキング済みか確認
+  const existing = await c.env.DB.prepare(
+    'SELECT id, deal_status FROM deal_tracking WHERE request_id = ?'
+  ).bind(requestId).first()
+
+  if (existing) {
+    if (existing.deal_status === 'estimate_approved') {
+      // トラッキング済みだがまだ estimate_approved → contracted に変更
+      await c.env.DB.prepare(
+        `UPDATE deal_tracking SET deal_status = 'contracted', updated_at = datetime('now') WHERE id = ?`
+      ).bind(existing.id).run()
+      await c.env.DB.prepare(
+        `INSERT INTO audit_logs (id, user_id, action, target_table, target_id, detail)
+         VALUES (?, ?, 'deal_contract_confirmed', 'deal_tracking', ?, ?)`
+      ).bind(generateId(), user.userId, existing.id, JSON.stringify({
+        confirmed_by: user.displayName || user.userId,
+        old_status: 'estimate_approved', new_status: 'contracted'
+      })).run()
+      return c.json({ id: existing.id, message: '工事決定を確定しました' })
+    }
+    return c.json({ error: 'この案件は既に工事決定済みまたは別のステータスです' }, 400)
+  }
+
+  // 未トラッキング → 新規作成して即 contracted に
+  const id = generateId()
+  await c.env.DB.prepare(
+    `INSERT INTO deal_tracking (id, request_id, deal_status) VALUES (?, ?, 'contracted')`
+  ).bind(id, requestId).run()
+
+  await c.env.DB.prepare(
+    `INSERT INTO audit_logs (id, user_id, action, target_table, target_id, detail)
+     VALUES (?, ?, 'deal_confirmed_from_estimate', 'deal_tracking', ?, ?)`
+  ).bind(generateId(), user.userId, id, JSON.stringify({
+    request_id: requestId,
+    confirmed_by: user.displayName || user.userId,
+    status: 'contracted'
+  })).run()
+
+  return c.json({ id, message: '工事決定を確定しました' })
+})
+
+// 見積もりから直接見送り（トラッキング未登録の承認済み見積もりを失注に）
+dealRoutes.post('/dismiss-from-estimate/:requestId', async (c) => {
+  const user = await getAdminOrApprover(c)
+  if (!user) return c.json({ error: '権限が必要です' }, 403)
+
+  const requestId = c.req.param('requestId')
+
+  const request = await c.env.DB.prepare(
+    "SELECT * FROM requests WHERE id = ? AND type = 'estimate' AND status IN ('completed','processed')"
+  ).bind(requestId).first()
+  if (!request) return c.json({ error: '承認済みの見積もり申請が見つかりません' }, 404)
+
+  const existing = await c.env.DB.prepare(
+    'SELECT id, deal_status FROM deal_tracking WHERE request_id = ?'
+  ).bind(requestId).first()
+
+  if (existing) {
+    if (existing.deal_status === 'estimate_approved') {
+      await c.env.DB.prepare(
+        `UPDATE deal_tracking SET deal_status = 'lost', updated_at = datetime('now') WHERE id = ?`
+      ).bind(existing.id).run()
+      await c.env.DB.prepare(
+        `INSERT INTO audit_logs (id, user_id, action, target_table, target_id, detail)
+         VALUES (?, ?, 'deal_dismissed', 'deal_tracking', ?, ?)`
+      ).bind(generateId(), user.userId, existing.id, JSON.stringify({
+        dismissed_by: user.displayName || user.userId,
+        old_status: 'estimate_approved', new_status: 'lost'
+      })).run()
+      return c.json({ id: existing.id, message: 'この案件を見送りにしました' })
+    }
+    return c.json({ error: 'この案件は既に処理済みです' }, 400)
+  }
+
+  // 未トラッキング → 新規作成して即 lost に
+  const id = generateId()
+  await c.env.DB.prepare(
+    `INSERT INTO deal_tracking (id, request_id, deal_status) VALUES (?, ?, 'lost')`
+  ).bind(id, requestId).run()
+
+  await c.env.DB.prepare(
+    `INSERT INTO audit_logs (id, user_id, action, target_table, target_id, detail)
+     VALUES (?, ?, 'deal_dismissed_from_estimate', 'deal_tracking', ?, ?)`
+  ).bind(generateId(), user.userId, id, JSON.stringify({
+    request_id: requestId,
+    dismissed_by: user.displayName || user.userId,
+    status: 'lost'
+  })).run()
+
+  return c.json({ id, message: 'この案件を見送りにしました' })
+})
+
+// ====== パラメータ付きルート ======
+
+// 案件ステータス更新（利益率・原価含む）
+dealRoutes.post('/:id/update', async (c) => {
+  const admin = await getAdminUser(c)
+  if (!admin) return c.json({ error: '管理者権限が必要です' }, 403)
+
+  const id = c.req.param('id')
+  const body = await c.req.json()
+  const {
+    deal_status, contract_date, contract_amount, contract_amount_excl_tax, contract_tax_rate,
+    construction_start, construction_end,
+    cost_amount, profit_rate,
+    notes
+  } = body
+
+  const deal = await c.env.DB.prepare('SELECT * FROM deal_tracking WHERE id = ?').bind(id).first()
+  if (!deal) return c.json({ error: '案件が見つかりません' }, 404)
+
+  await c.env.DB.prepare(
+    `UPDATE deal_tracking SET
+      deal_status = COALESCE(?, deal_status),
+      contract_date = COALESCE(?, contract_date),
+      contract_amount = COALESCE(?, contract_amount),
+      contract_amount_excl_tax = COALESCE(?, contract_amount_excl_tax),
+      contract_tax_rate = COALESCE(?, contract_tax_rate),
+      construction_start = COALESCE(?, construction_start),
+      construction_end = COALESCE(?, construction_end),
+      cost_amount = COALESCE(?, cost_amount),
+      profit_rate = COALESCE(?, profit_rate),
+      notes = COALESCE(?, notes),
+      updated_at = datetime('now')
+    WHERE id = ?`
+  ).bind(
+    deal_status || null, contract_date || null, contract_amount || null,
+    contract_amount_excl_tax !== undefined && contract_amount_excl_tax !== '' ? contract_amount_excl_tax : null,
+    contract_tax_rate !== undefined && contract_tax_rate !== '' ? contract_tax_rate : null,
+    construction_start || null, construction_end || null,
+    cost_amount !== undefined && cost_amount !== '' ? cost_amount : null,
+    profit_rate !== undefined && profit_rate !== '' ? profit_rate : null,
+    notes !== undefined ? notes : null,
+    id
+  ).run()
+
+  await c.env.DB.prepare(
+    `INSERT INTO audit_logs (id, user_id, action, target_table, target_id, detail)
+     VALUES (?, ?, 'deal_updated', 'deal_tracking', ?, ?)`
+  ).bind(generateId(), admin.userId, id, JSON.stringify({
+    old_status: deal.deal_status, new_status: deal_status || deal.deal_status, ...body
+  })).run()
+
+  return c.json({ message: '案件情報を更新しました' })
+})
+
+// 案件削除
+dealRoutes.post('/:id/delete', async (c) => {
+  const admin = await getAdminUser(c)
+  if (!admin) return c.json({ error: '管理者権限が必要です' }, 403)
+
+  const id = c.req.param('id')
+  await c.env.DB.prepare('DELETE FROM deal_payments WHERE deal_id = ?').bind(id).run()
+  await c.env.DB.prepare('DELETE FROM deal_tracking WHERE id = ?').bind(id).run()
+
+  await c.env.DB.prepare(
+    `INSERT INTO audit_logs (id, user_id, action, target_table, target_id)
+     VALUES (?, ?, 'deal_deleted', 'deal_tracking', ?)`
+  ).bind(generateId(), admin.userId, id).run()
+
+  return c.json({ message: '案件トラッキングを削除しました' })
+})
+
+// 工事決定確定（承認者がトラッキング済み案件の契約確定を押す）
+dealRoutes.post('/:id/confirm-contract', async (c) => {
+  const user = await getAdminOrApprover(c)
+  if (!user) return c.json({ error: '権限が必要です' }, 403)
+
+  const id = c.req.param('id')
+  const deal = await c.env.DB.prepare('SELECT * FROM deal_tracking WHERE id = ?').bind(id).first()
+  if (!deal) return c.json({ error: '案件が見つかりません' }, 404)
+
+  if (deal.deal_status !== 'estimate_approved') {
+    return c.json({ error: 'この案件は既に工事決定済みまたは別のステータスです' }, 400)
+  }
+
+  await c.env.DB.prepare(
+    `UPDATE deal_tracking SET deal_status = 'contracted', updated_at = datetime('now') WHERE id = ?`
+  ).bind(id).run()
+
+  await c.env.DB.prepare(
+    `INSERT INTO audit_logs (id, user_id, action, target_table, target_id, detail)
+     VALUES (?, ?, 'deal_contract_confirmed', 'deal_tracking', ?, ?)`
+  ).bind(generateId(), user.userId, id, JSON.stringify({
+    confirmed_by: user.displayName || user.userId,
+    old_status: 'estimate_approved',
+    new_status: 'contracted'
+  })).run()
+
+  return c.json({ message: '工事決定を確定しました' })
+})
+
+// 見送り（トラッキング済み案件を失注に変更）
+dealRoutes.post('/:id/dismiss', async (c) => {
+  const user = await getAdminOrApprover(c)
+  if (!user) return c.json({ error: '権限が必要です' }, 403)
+
+  const id = c.req.param('id')
+  const deal = await c.env.DB.prepare('SELECT * FROM deal_tracking WHERE id = ?').bind(id).first()
+  if (!deal) return c.json({ error: '案件が見つかりません' }, 404)
+
+  if (deal.deal_status !== 'estimate_approved') {
+    return c.json({ error: 'この案件は既に処理済みです' }, 400)
+  }
+
+  await c.env.DB.prepare(
+    `UPDATE deal_tracking SET deal_status = 'lost', updated_at = datetime('now') WHERE id = ?`
+  ).bind(id).run()
+
+  await c.env.DB.prepare(
+    `INSERT INTO audit_logs (id, user_id, action, target_table, target_id, detail)
+     VALUES (?, ?, 'deal_dismissed', 'deal_tracking', ?, ?)`
+  ).bind(generateId(), user.userId, id, JSON.stringify({
+    dismissed_by: user.displayName || user.userId,
+    old_status: 'estimate_approved',
+    new_status: 'lost'
+  })).run()
+
+  return c.json({ message: 'この案件を見送りにしました' })
+})
+
+// 入金追加
+dealRoutes.post('/:id/payments', async (c) => {
+  const admin = await getAdminUser(c)
+  if (!admin) return c.json({ error: '管理者権限が必要です' }, 403)
+
+  const dealId = c.req.param('id')
+  const deal = await c.env.DB.prepare('SELECT id FROM deal_tracking WHERE id = ?').bind(dealId).first()
+  if (!deal) return c.json({ error: '案件が見つかりません' }, 404)
+
+  const { payment_type, label, expected_amount, expected_date, actual_amount, actual_date, invoice_date, notes } = await c.req.json()
+
+  if (!payment_type || !label) return c.json({ error: '入金種別とラベルは必須です' }, 400)
+
+  const id = generateId()
+  await c.env.DB.prepare(
+    `INSERT INTO deal_payments (id, deal_id, payment_type, label, expected_amount, expected_date, actual_amount, actual_date, invoice_date, notes)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(id, dealId, payment_type, label,
+    expected_amount || null, expected_date || null,
+    actual_amount || null, actual_date || null,
+    invoice_date || null, notes || null
+  ).run()
+
+  await c.env.DB.prepare(
+    `INSERT INTO audit_logs (id, user_id, action, target_table, target_id, detail)
+     VALUES (?, ?, 'payment_added', 'deal_payments', ?, ?)`
+  ).bind(generateId(), admin.userId, id, JSON.stringify({ deal_id: dealId, label, payment_type })).run()
+
+  return c.json({ id, message: '入金情報を追加しました' })
+})
+
+// 入金更新
+dealRoutes.post('/:id/payments/:paymentId/update', async (c) => {
+  const admin = await getAdminUser(c)
+  if (!admin) return c.json({ error: '管理者権限が必要です' }, 403)
+
+  const paymentId = c.req.param('paymentId')
+  const body = await c.req.json()
+  const { payment_type, label, expected_amount, expected_date, actual_amount, actual_date, invoice_date, notes } = body
+
+  await c.env.DB.prepare(
+    `UPDATE deal_payments SET
+      payment_type = COALESCE(?, payment_type),
+      label = COALESCE(?, label),
+      expected_amount = ?,
+      expected_date = ?,
+      actual_amount = ?,
+      actual_date = ?,
+      invoice_date = ?,
+      notes = ?,
+      updated_at = datetime('now')
+    WHERE id = ?`
+  ).bind(
+    payment_type || null, label || null,
+    expected_amount !== undefined ? (expected_amount || null) : null,
+    expected_date || null,
+    actual_amount !== undefined ? (actual_amount || null) : null,
+    actual_date || null,
+    invoice_date || null,
+    notes !== undefined ? (notes || null) : null,
+    paymentId
+  ).run()
+
+  return c.json({ message: '入金情報を更新しました' })
+})
+
+// 入金削除
+dealRoutes.post('/:id/payments/:paymentId/delete', async (c) => {
+  const admin = await getAdminUser(c)
+  if (!admin) return c.json({ error: '管理者権限が必要です' }, 403)
+
+  const paymentId = c.req.param('paymentId')
+  await c.env.DB.prepare('DELETE FROM deal_payments WHERE id = ?').bind(paymentId).run()
+
+  return c.json({ message: '入金情報を削除しました' })
 })

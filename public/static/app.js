@@ -2460,6 +2460,9 @@ async function renderDealListApprover(main) {
             const confirmAction = isUntracked
               ? `confirmFromEstimate('${d.id}')`
               : `confirmContract('${d.id}')`;
+            const dismissAction = isUntracked
+              ? `dismissFromEstimate('${d.id}')`
+              : `dismissDeal('${d.id}')`;
             const detailAction = isUntracked
               ? ''
               : `<button onclick="navigate('admin-deal-detail',{id:'${d.id}'})" class="px-3 py-1.5 text-xs text-gray-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg text-center">詳細を見る</button>`;
@@ -2483,6 +2486,10 @@ async function renderDealListApprover(main) {
                   <button onclick="event.stopPropagation();${confirmAction}" 
                     class="px-5 py-2.5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-bold text-sm shadow-sm whitespace-nowrap">
                     <i class="fas fa-check-circle mr-1"></i>工事決定
+                  </button>
+                  <button onclick="event.stopPropagation();${dismissAction}" 
+                    class="px-5 py-2.5 bg-white border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-100 hover:text-red-600 hover:border-red-300 text-sm whitespace-nowrap transition-colors">
+                    <i class="fas fa-times-circle mr-1"></i>見送り
                   </button>
                   ${detailAction}
                 </div>
@@ -3001,9 +3008,14 @@ function renderDealDetailReadonly(main, d, payments) {
       '<div class="bg-indigo-50 border-2 border-indigo-300 rounded-xl p-6 mb-5 text-center">'
       + '<p class="text-indigo-800 font-bold text-base mb-1"><i class="fas fa-handshake mr-2"></i>この案件の工事が決定しましたか？</p>'
       + '<p class="text-sm text-indigo-500 mb-4">確定後、契約や工事の詳細管理は岩野が行います</p>'
+      + '<div class="flex justify-center gap-4">'
       + '<button onclick="confirmContract(\'' + d.id + '\')" class="px-8 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-bold text-base shadow-md">'
-      + '<i class="fas fa-check-circle mr-2"></i>工事決定を確定する'
+      + '<i class="fas fa-check-circle mr-2"></i>工事決定'
       + '</button>'
+      + '<button onclick="dismissDeal(\'' + d.id + '\')" class="px-8 py-3 bg-white border-2 border-gray-300 text-gray-600 rounded-lg hover:bg-gray-100 hover:text-red-600 hover:border-red-300 font-bold text-base transition-colors">'
+      + '<i class="fas fa-times-circle mr-2"></i>見送り'
+      + '</button>'
+      + '</div>'
       + '</div>'
     : '')
 
@@ -3050,6 +3062,28 @@ async function confirmFromEstimate(requestId) {
     try {
       await api('/deals/confirm-from-estimate/' + requestId, { method: 'POST' });
       showToast('工事決定を確定しました');
+      renderPageContent();
+    } catch (err) { showToast(err.message, 'error'); }
+  });
+}
+
+// トラッキング済み案件を見送り
+async function dismissDeal(dealId) {
+  showConfirm('この案件を見送り（失注）にしますか？', async function() {
+    try {
+      await api('/deals/' + dealId + '/dismiss', { method: 'POST' });
+      showToast('案件を見送りにしました');
+      renderPageContent();
+    } catch (err) { showToast(err.message, 'error'); }
+  });
+}
+
+// 未トラッキング見積もりから直接見送り
+async function dismissFromEstimate(requestId) {
+  showConfirm('この案件を見送り（失注）にしますか？', async function() {
+    try {
+      await api('/deals/dismiss-from-estimate/' + requestId, { method: 'POST' });
+      showToast('案件を見送りにしました');
       renderPageContent();
     } catch (err) { showToast(err.message, 'error'); }
   });
