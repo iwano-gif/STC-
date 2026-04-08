@@ -24,6 +24,11 @@ async function api(path, options = {}) {
   try {
     const res = await fetch(`/api${path}`, { ...options, headers: { ...headers, ...options.headers } });
     if (res.headers.get('Content-Type')?.includes('text/csv')) return res;
+    const contentType = res.headers.get('Content-Type') || '';
+    if (!contentType.includes('application/json')) {
+      const text = await res.text();
+      throw new Error(res.ok ? text : `サーバーエラー (${res.status}): ${text.substring(0, 100)}`);
+    }
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'エラーが発生しました');
     return data;
