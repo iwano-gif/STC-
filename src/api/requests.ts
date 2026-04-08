@@ -283,7 +283,14 @@ requestRoutes.post('/:id/delete', async (c) => {
     return c.json({ error: 'この申請は削除できません' }, 400)
   }
 
-  // 関連データを全て削除
+  // 関連データを全て削除（FK制約の順序: 子テーブルから先に削除）
+  // deal_payments → deal_tracking → request_files → approval_steps → notification_logs → requests
+  const deals = await c.env.DB.prepare('SELECT id FROM deal_tracking WHERE request_id = ?').bind(id).all()
+  for (const deal of (deals.results || [])) {
+    await c.env.DB.prepare('DELETE FROM deal_payments WHERE deal_id = ?').bind(deal.id).run()
+  }
+  await c.env.DB.prepare('DELETE FROM deal_tracking WHERE request_id = ?').bind(id).run()
+  await c.env.DB.prepare('DELETE FROM notification_logs WHERE request_id = ?').bind(id).run()
   await c.env.DB.prepare('DELETE FROM request_files WHERE request_id = ?').bind(id).run()
   await c.env.DB.prepare('DELETE FROM approval_steps WHERE request_id = ?').bind(id).run()
   await c.env.DB.prepare('DELETE FROM requests WHERE id = ?').bind(id).run()
