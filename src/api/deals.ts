@@ -199,6 +199,122 @@ dealRoutes.get('/dashboard/summary', async (c) => {
   })
 })
 
+// ====== CSVエクスポート（管理者・承認者） ======
+dealRoutes.get('/export/csv', async (c) => {
+  const user = await getAdminOrApprover(c)
+  if (!user) return c.json({ error: '権限が必要です' }, 403)
+
+  const statusFilter = c.req.query('status') || ''
+
+  let where = '1=1'
+  const params: any[] = []
+  if (statusFilter) { where += ' AND d.deal_status = ?'; params.push(statusFilter) }
+
+  // 全案件を取得（入金情報含む）
+  const deals = await c.env.DB.prepare(
+    `SELECT d.*, r.request_number, r.type, r.title, r.client_name,
+            r.amount, r.tax_rate, r.amount_with_tax, r.gross_profit_rate,
+            r.created_at as request_date, r.remarks,
+            p.display_name as applicant_name
+     FROM deal_tracking d
+     JOIN requests r ON d.request_id = r.id
+     JOIN profiles p ON r.applicant_id = p.id
+     WHERE ${where}
+     ORDER BY d.deal_status, d.updated_at DESC`
+  ).bind(...params).all()
+
+  // 各案件の入金情報を取得
+  const dealRows: any[] = []
+  for (const deal of deals.results as any[]) {
+    const payments = await c.env.DB.prepare(
+      `SELECT SUM(actual_amount) as received, SUM(expected_amount) as expected,
+              COUNT(*) as payment_count
+       FROM deal_payments WHERE deal_id = ?`
+    ).bind(deal.id).first()
+    dealRows.push({ ...deal, payments })
+  }
+
+  // ステータスラベル
+  const statusLabel: Record<string, string> = {
+    estimate_approved: '見積承認済み',
+    contracted: '契約済み',
+    construction: '工事中',
+    construction_done: '工事完了',
+    invoiced: '請求済み',
+    payment_received: '入金済み',
+    lost: '見送り'
+  }
+
+  // CSV生成
+  const headers = [
+    '申請番号', 'ステータス', '種別', '件名', '取引先', '申請者',
+    '見積金額(税抜)', '税率', '見積金額(税込)', '粗利率(%)',
+    '契約金額(税抜)', '契約税率', '契約金額(税込)',
+    '原価', '粗利額', '粗利率(実績%)',
+    '契約日', '工事開始日', '工事完了日',
+    '入金予定合計', '入金済合計', '入金件数',
+    '見積日', '備考'
+  ]
+
+  const escCsv = (v: any) => {
+    if (v === null || v === undefined || v === '') return ''
+    const s = String(v)
+    if (s.includes(',') || s.includes('"') || s.includes('\n')) {
+      return '"' + s.replace(/"/g, '""') + '"'
+    }
+    return s
+  }
+
+  const rows = dealRows.map((d: any) => {
+    const exclTax = d.contract_amount_excl_tax || d.amount || 0
+    const cost = d.cost_amount || 0
+    const profit = exclTax - cost
+    const profitRate = exclTax > 0 ? ((profit / exclTax) * 100).toFixed(1) : ''
+    const typeLabel = d.type === 'estimate' ? '見積' : '請求'
+
+    return [
+      String(d.request_number).padStart(4, '0'),
+      statusLabel[d.deal_status] || d.deal_status,
+      typeLabel,
+      d.title,
+      d.client_name,
+      d.applicant_name,
+      d.amount || '',
+      d.tax_rate ? `${Math.round(d.tax_rate * 100)}%` : '',
+      d.amount_with_tax || '',
+      d.gross_profit_rate != null ? `${d.gross_profit_rate}` : '',
+      d.contract_amount_excl_tax || '',
+      d.contract_tax_rate ? `${Math.round(d.contract_tax_rate * 100)}%` : '',
+      d.contract_amount || '',
+      d.cost_amount || '',
+      cost > 0 ? profit : '',
+      cost > 0 ? profitRate : '',
+      d.contract_date || '',
+      d.construction_start || '',
+      d.construction_end || '',
+      d.payments?.expected || '',
+      d.payments?.received || '',
+      d.payments?.payment_count || 0,
+      d.request_date ? d.request_date.substring(0, 10) : '',
+      d.remarks || ''
+    ].map(escCsv).join(',')
+  })
+
+  // BOM付きUTF-8（Excel対応）
+  const bom = '\uFEFF'
+  const csv = bom + headers.join(',') + '\n' + rows.join('\n')
+
+  const today = new Date().toISOString().substring(0, 10)
+  const filename = `案件一覧_${today}.csv`
+
+  return new Response(csv, {
+    headers: {
+      'Content-Type': 'text/csv; charset=utf-8',
+      'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`
+    }
+  })
+})
+
 // ====== 案件詳細（管理者・承認者） ======
 dealRoutes.get('/:id', async (c) => {
   const user = await getAdminOrApprover(c)

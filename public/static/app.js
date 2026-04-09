@@ -2358,6 +2358,9 @@ async function renderDealList(main) {
   main.innerHTML = `
     <div class="flex items-center justify-between mb-4">
       <h1 class="text-xl font-bold text-gray-900"><i class="fas fa-project-diagram text-indigo-600 mr-2"></i>案件一覧</h1>
+      <button onclick="exportDealsCsv('${status}')" class="px-4 py-2 text-sm bg-white border border-gray-300 rounded-lg hover:bg-gray-50 shadow-sm">
+        <i class="fas fa-file-csv text-green-600 mr-1"></i>CSV出力
+      </button>
     </div>
 
     ${untracked.estimates.length > 0 ? `
@@ -3127,7 +3130,12 @@ async function renderDealDashboard(main) {
                               .reduce((s, p) => s + (p.total_excl || 0), 0);
 
   main.innerHTML = `
-    <h1 class="text-xl font-bold text-gray-900 mb-4"><i class="fas fa-chart-line text-indigo-600 mr-2"></i>案件ダッシュボード</h1>
+    <div class="flex items-center justify-between mb-4">
+      <h1 class="text-xl font-bold text-gray-900"><i class="fas fa-chart-line text-indigo-600 mr-2"></i>案件ダッシュボード</h1>
+      <button onclick="exportDealsCsv()" class="px-4 py-2 text-sm bg-white border border-gray-300 rounded-lg hover:bg-gray-50 shadow-sm">
+        <i class="fas fa-file-csv text-green-600 mr-1"></i>CSV出力
+      </button>
+    </div>
 
     <!-- サマリーカード -->
     <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
@@ -3268,6 +3276,33 @@ async function renderDealDashboard(main) {
         `).join('')}
       </div>
     </div>` : ''}`;
+}
+
+// ====== CSVエクスポート ======
+async function exportDealsCsv(statusFilter) {
+  try {
+    const params = statusFilter ? `?status=${statusFilter}` : '';
+    const res = await fetch(`/api/deals/export/csv${params}`, {
+      headers: { 'Authorization': `Bearer ${state.token}` }
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(text.substring(0, 200));
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const today = new Date().toISOString().substring(0, 10);
+    a.download = `案件一覧_${today}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    showToast('CSVをダウンロードしました');
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
 }
 
 // ============================================================
