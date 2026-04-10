@@ -110,8 +110,17 @@ requestRoutes.get('/:id', async (c) => {
     'SELECT id, request_id, file_name, file_path, file_size, mime_type, uploaded_at FROM request_files WHERE request_id = ? ORDER BY uploaded_at ASC'
   ).bind(id).all()
 
+  // 元請け会社名を取得
+  let primeContractorName = null
+  if ((request as any).prime_contractor_id) {
+    const pc = await c.env.DB.prepare(
+      'SELECT company_name FROM partner_companies WHERE id = ?'
+    ).bind((request as any).prime_contractor_id).first()
+    if (pc) primeContractorName = pc.company_name
+  }
+
   return c.json({
-    request,
+    request: { ...request as any, prime_contractor_name: primeContractorName },
     steps: steps.results,
     files: files.results
   })
@@ -123,7 +132,7 @@ requestRoutes.post('/', async (c) => {
   if (!user) return c.json({ error: '認証が必要です' }, 401)
 
   const body = await c.req.json()
-  const { type, title, client_name, amount_with_tax: inputAmountWithTax, tax_rate, remarks, gross_profit_rate } = body
+  const { type, title, client_name, amount_with_tax: inputAmountWithTax, tax_rate, remarks, gross_profit_rate, prime_contractor_id } = body
 
   // Validation
   if (!type || !['estimate', 'invoice'].includes(type)) {
@@ -186,9 +195,9 @@ requestRoutes.post('/', async (c) => {
 
   // Insert request
   await c.env.DB.prepare(
-    `INSERT INTO requests (id, request_number, type, applicant_id, title, client_name, amount, tax_rate, amount_with_tax, remarks, gross_profit_rate, status, current_step, version)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 1, 1)`
-  ).bind(requestId, requestNumber, type, user.userId, title, client_name, amount, tax_rate, amount_with_tax, remarks || null, profitRate).run()
+    `INSERT INTO requests (id, request_number, type, applicant_id, title, client_name, amount, tax_rate, amount_with_tax, remarks, gross_profit_rate, prime_contractor_id, status, current_step, version)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 1, 1)`
+  ).bind(requestId, requestNumber, type, user.userId, title, client_name, amount, tax_rate, amount_with_tax, remarks || null, profitRate, prime_contractor_id || null).run()
 
   // Create approval steps
   let stepOrder = 1
@@ -284,9 +293,10 @@ requestRoutes.post('/:id/delete', async (c) => {
   }
 
   // 関連データを全て削除（FK制約の順序: 子テーブルから先に削除）
-  // deal_payments → deal_tracking → request_files → approval_steps → notification_logs → requests
+  // deal_partners → deal_payments → deal_tracking → request_files → approval_steps → notification_logs → requests
   const deals = await c.env.DB.prepare('SELECT id FROM deal_tracking WHERE request_id = ?').bind(id).all()
   for (const deal of (deals.results || [])) {
+    await c.env.DB.prepare('DELETE FROM deal_partners WHERE deal_id = ?').bind(deal.id).run()
     await c.env.DB.prepare('DELETE FROM deal_payments WHERE deal_id = ?').bind(deal.id).run()
   }
   await c.env.DB.prepare('DELETE FROM deal_tracking WHERE request_id = ?').bind(id).run()
@@ -324,7 +334,7 @@ requestRoutes.post('/:id/resubmit', async (c) => {
   }
 
   const body = await c.req.json()
-  const { type, title, client_name, amount_with_tax, tax_rate, remarks, gross_profit_rate } = body
+  const { type, title, client_name, amount_with_tax, tax_rate, remarks, gross_profit_rate, prime_contractor_id } = body
 
   // Validation (same as create)
   if (!type || !['estimate', 'invoice'].includes(type)) return c.json({ error: '申請種別を選択してください' }, 400)
@@ -346,10 +356,10 @@ requestRoutes.post('/:id/resubmit', async (c) => {
 
   // Update request
   await c.env.DB.prepare(
-    `UPDATE requests SET type=?, title=?, client_name=?, amount=?, tax_rate=?, amount_with_tax=?, remarks=?, gross_profit_rate=?,
+    `UPDATE requests SET type=?, title=?, client_name=?, amount=?, tax_rate=?, amount_with_tax=?, remarks=?, gross_profit_rate=?, prime_contractor_id=?,
      status='pending', current_step=1, version=?, updated_at=datetime('now')
      WHERE id = ?`
-  ).bind(type, title, client_name, amount, tax_rate, computedAmountWithTax, remarks || null, profitRate, newVersion, id).run()
+  ).bind(type, title, client_name, amount, tax_rate, computedAmountWithTax, remarks || null, profitRate, prime_contractor_id || null, newVersion, id).run()
 
   // Create new approval steps with new version
   const approvers = await c.env.DB.prepare(

@@ -7,6 +7,7 @@ import { adminRoutes } from './api/admin'
 import { dashboardRoutes } from './api/dashboard'
 import { fileRoutes } from './api/files'
 import { dealRoutes } from './api/deals'
+import { partnerRoutes } from './api/partners'
 import { renderPage } from './pages/layout'
 
 type Bindings = {
@@ -34,6 +35,7 @@ app.route('/api/admin', adminRoutes)
 app.route('/api/dashboard', dashboardRoutes)
 app.route('/api/files', fileRoutes)
 app.route('/api/deals', dealRoutes)
+app.route('/api/partners', partnerRoutes)
 
 // SPA - serve the main page for all non-API routes
 app.get('*', (c) => {

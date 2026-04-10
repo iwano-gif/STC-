@@ -156,7 +156,8 @@ function getPath(page, params = {}) {
     'admin-audit': '/admin/audit-logs',
     'admin-deals': '/admin/deals',
     'admin-deal-detail': `/admin/deals/${params.id}`,
-    'deal-dashboard': '/admin/deal-dashboard'
+    'deal-dashboard': '/admin/deal-dashboard',
+    'admin-partners': '/admin/partners'
   };
   return paths[page] || '/';
 }
@@ -337,6 +338,9 @@ function renderApp(app) {
               <a href="/admin/audit-logs" onclick="event.preventDefault();navigate('admin-audit')" class="sidebar-link ${state.currentPage==='admin-audit'?'active':''}">
                 <i class="fas fa-history w-5 text-center"></i><span>監査ログ</span>
               </a>
+              <a href="/admin/partners" onclick="event.preventDefault();navigate('admin-partners')" class="sidebar-link ${state.currentPage==='admin-partners'?'active':''}">
+                <i class="fas fa-handshake w-5 text-center"></i><span>協力会社管理</span>
+              </a>
             ` : ''}
             ${canSeeDeal ? `
               <div class="pt-3 mt-3 border-t border-gray-200">
@@ -390,6 +394,7 @@ async function renderPageContent() {
       case 'admin-deals': await renderDealList(main); break;
       case 'admin-deal-detail': await renderDealDetail(main); break;
       case 'deal-dashboard': await renderDealDashboard(main); break;
+      case 'admin-partners': await renderPartnerList(main); break;
       default: await renderDashboard(main);
     }
   } catch (err) {
@@ -539,7 +544,11 @@ async function quickApprove(stepId, requestId) {
 // ============================================================
 // NEW REQUEST FORM (with PDF Upload & Auto-fill)
 // ============================================================
-function renderNewRequest(main) {
+async function renderNewRequest(main) {
+  // 協力会社一覧を取得（元請け選択用）
+  let partners = [];
+  try { const pd = await api('/partners'); partners = pd.partners || []; } catch {}
+
   main.innerHTML = `
     <h1 class="text-xl font-bold text-gray-900 mb-4">新規申請</h1>
     <div class="bg-white border border-gray-200 rounded-lg p-6 max-w-2xl">
@@ -592,6 +601,13 @@ function renderNewRequest(main) {
         <div>
           <label class="block text-sm font-medium text-gray-700 mb-1">取引先名 <span class="text-red-500">*</span></label>
           <input type="text" id="req-client" required maxlength="100" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500" placeholder="取引先名を入力">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">元請け会社 <span class="text-xs text-gray-400 font-normal">（STCが下請けの場合）</span></label>
+          <select id="req-prime-contractor" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+            <option value="">なし（STCが元請け）</option>
+            ${partners.map(p => '<option value="' + p.id + '">' + p.company_name + (p.trade_type ? ' (' + p.trade_type + ')' : '') + '</option>').join('')}
+          </select>
         </div>
         <div class="grid grid-cols-2 gap-4">
           <div>
@@ -690,7 +706,8 @@ function renderNewRequest(main) {
         amount_with_tax: parseFloat(document.getElementById('req-amount').value),
         tax_rate: parseFloat(document.getElementById('req-tax').value),
         remarks: document.getElementById('req-remarks').value,
-        gross_profit_rate: profitRateInput !== '' ? parseFloat(profitRateInput) : null
+        gross_profit_rate: profitRateInput !== '' ? parseFloat(profitRateInput) : null,
+        prime_contractor_id: document.getElementById('req-prime-contractor').value || null
       };
       const res = await api('/requests', { method: 'POST', body: JSON.stringify(body) });
       
@@ -1193,6 +1210,7 @@ async function renderRequestDetail(main) {
         <div><span class="text-gray-500">申請者</span><p class="font-medium">${req.applicant_name}</p></div>
         <div><span class="text-gray-500">件名</span><p class="font-medium">${req.title}</p></div>
         <div><span class="text-gray-500">取引先</span><p class="font-medium">${req.client_name}</p></div>
+        ${req.prime_contractor_name ? `<div><span class="text-gray-500">元請け会社</span><p class="font-medium"><i class="fas fa-building text-indigo-400 mr-1"></i>${req.prime_contractor_name}</p></div>` : ''}
         <div><span class="text-gray-500">金額（税込）</span><p class="font-medium text-lg">${formatCurrency(req.amount_with_tax)}</p></div>
         <div><span class="text-gray-500">税率</span><p class="font-medium">${req.tax_rate * 100}%</p></div>
         <div><span class="text-gray-500">税抜金額</span><p class="font-medium">${formatCurrency(req.amount)}</p></div>
@@ -1615,6 +1633,8 @@ async function renderEditRequest(main) {
   const data = await api(`/requests/${id}`);
   const req = data.request;
   const existingFiles = data.files || [];
+  let partners = [];
+  try { const pd = await api('/partners'); partners = pd.partners || []; } catch {}
   
   // Find rejection comment
   const rejectedStep = data.steps.find(s => s.status === 'rejected');
@@ -1647,6 +1667,13 @@ async function renderEditRequest(main) {
         <div>
           <label class="block text-sm font-medium text-gray-700 mb-1">取引先名 <span class="text-red-500">*</span></label>
           <input type="text" id="edit-client" required maxlength="100" value="${req.client_name}" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">元請け会社 <span class="text-xs text-gray-400 font-normal">（STCが下請けの場合）</span></label>
+          <select id="edit-prime-contractor" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+            <option value="">なし（STCが元請け）</option>
+            ${partners.map(p => '<option value="' + p.id + '"' + (req.prime_contractor_id === p.id ? ' selected' : '') + '>' + p.company_name + (p.trade_type ? ' (' + p.trade_type + ')' : '') + '</option>').join('')}
+          </select>
         </div>
         <div class="grid grid-cols-2 gap-4">
           <div>
@@ -1807,7 +1834,8 @@ async function renderEditRequest(main) {
         amount_with_tax: parseFloat(document.getElementById('edit-amount').value),
         tax_rate: parseFloat(document.getElementById('edit-tax').value),
         remarks: document.getElementById('edit-remarks').value,
-        gross_profit_rate: editProfitRateInput !== '' ? parseFloat(editProfitRateInput) : null
+        gross_profit_rate: editProfitRateInput !== '' ? parseFloat(editProfitRateInput) : null,
+        prime_contractor_id: document.getElementById('edit-prime-contractor').value || null
       };
       await api(`/requests/${id}/resubmit`, { method: 'POST', body: JSON.stringify(body) });
       
@@ -2673,6 +2701,7 @@ async function renderDealDetail(main) {
 
   const data = await api(`/deals/${id}`);
   const d = data.deal;
+  const dealPartners = data.partners || [];
   const isAdmin = hasRole('admin');
 
   // 承認者向け: シンプルな閲覧ビュー + 工事決定ボタンのみ
@@ -2709,6 +2738,7 @@ async function renderDealDetail(main) {
         <div><span class="text-gray-500">件名</span><p class="font-medium">${d.title}</p></div>
         <div><span class="text-gray-500">取引先</span><p class="font-medium">${d.client_name}</p></div>
         <div><span class="text-gray-500">申請者</span><p class="font-medium">${d.applicant_name}</p></div>
+        ${d.prime_contractor_name ? `<div><span class="text-gray-500">元請け会社</span><p class="font-medium"><i class="fas fa-building text-indigo-400 mr-1"></i>${d.prime_contractor_name}</p></div>` : ''}
         <div>
           <span class="text-gray-500">見積金額（税抜）</span>
           <p class="font-medium text-lg">${formatCurrency(d.amount)}</p>
@@ -2816,6 +2846,17 @@ async function renderDealDetail(main) {
         </div>
       </div>
 
+      <!-- 協力会社（下請け・元請け） -->
+      <div class="bg-white border border-gray-200 rounded-lg p-5">
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-sm font-semibold text-orange-600"><i class="fas fa-handshake mr-1"></i>協力会社 <span class="text-xs font-normal text-gray-400 ml-1">下請け・元請け</span></h2>
+          <button type="button" onclick="showAddDealPartnerModal('${d.id}')" class="px-3 py-1.5 text-xs bg-orange-600 text-white rounded-lg hover:bg-orange-700">
+            <i class="fas fa-plus mr-1"></i>協力会社を追加
+          </button>
+        </div>
+        ${renderDealPartnersSection(dealPartners, d.id)}
+      </div>
+
       <!-- 分割入金管理 -->
       <div class="bg-white border border-gray-200 rounded-lg p-5">
         <div class="flex items-center justify-between mb-4">
@@ -2904,6 +2945,173 @@ async function renderDealDetail(main) {
       renderPageContent();
     } catch (err) { showToast(err.message, 'error'); }
   };
+}
+
+// ====== 協力会社セクション ======
+const PARTNER_ROLE_MAP = {
+  prime_contractor: { label: '元請け', color: 'bg-indigo-100 text-indigo-800', icon: 'fa-building' },
+  subcontractor: { label: '下請け', color: 'bg-orange-100 text-orange-800', icon: 'fa-hard-hat' }
+};
+
+function renderDealPartnersSection(partners, dealId) {
+  if (!partners || partners.length === 0) {
+    return '<div class="text-center py-4 text-gray-400"><i class="fas fa-handshake text-2xl mb-2"></i><p class="text-sm">協力会社はまだ登録されていません</p></div>';
+  }
+
+  const totalSubCost = partners.filter(p => p.role === 'subcontractor').reduce((s, p) => s + (p.contract_amount || 0), 0);
+
+  let html = '<div class="space-y-2">';
+  partners.forEach(p => {
+    const r = PARTNER_ROLE_MAP[p.role] || PARTNER_ROLE_MAP.subcontractor;
+    html += `
+      <div class="flex items-center gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200 hover:bg-gray-100 transition-colors">
+        <div class="flex-shrink-0">
+          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${r.color}">
+            <i class="fas ${r.icon} mr-1"></i>${r.label}
+          </span>
+        </div>
+        <div class="flex-1 min-w-0">
+          <p class="text-sm font-medium text-gray-900">${p.company_name}</p>
+          <p class="text-xs text-gray-500">${p.trade_type || ''} ${p.representative_name ? '・' + p.representative_name : ''}</p>
+        </div>
+        <div class="text-right flex-shrink-0">
+          ${p.contract_amount ? `<p class="text-sm font-bold text-gray-900">${formatCurrency(p.contract_amount)}</p><p class="text-[10px] text-gray-400">税抜</p>` : '<p class="text-xs text-gray-400">金額未設定</p>'}
+        </div>
+        <div class="flex gap-1 flex-shrink-0">
+          <button type="button" onclick="showEditDealPartnerModal('${dealId}','${p.id}','${p.partner_id}','${p.role}',${p.contract_amount || 'null'},'${(p.notes || '').replace(/'/g, "\\'")}')" class="p-1.5 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded" title="編集"><i class="fas fa-edit text-xs"></i></button>
+          <button type="button" onclick="deleteDealPartner('${p.id}','${p.company_name}')" class="p-1.5 text-red-500 hover:text-red-700 hover:bg-red-50 rounded" title="削除"><i class="fas fa-trash text-xs"></i></button>
+        </div>
+      </div>`;
+  });
+  html += '</div>';
+  if (totalSubCost > 0) {
+    html += `<div class="mt-3 p-3 bg-orange-50 border border-orange-200 rounded-lg flex justify-between items-center">
+      <span class="text-sm text-orange-700 font-medium"><i class="fas fa-calculator mr-1"></i>下請け原価合計（税抜）</span>
+      <span class="text-lg font-bold text-orange-800">${formatCurrency(totalSubCost)}</span>
+    </div>`;
+  }
+  return html;
+}
+
+async function showAddDealPartnerModal(dealId) {
+  // 協力会社マスタ一覧を取得
+  let partners = [];
+  try { const pd = await api('/partners'); partners = pd.partners || []; } catch {}
+  
+  if (partners.length === 0) {
+    showToast('先に「協力会社管理」で協力会社を登録してください', 'error');
+    return;
+  }
+
+  const content = `
+    <div class="space-y-3">
+      <div>
+        <label class="block text-xs font-medium text-gray-600 mb-1">協力会社 <span class="text-red-500">*</span></label>
+        <select id="dp-partner" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+          ${partners.map(p => '<option value="' + p.id + '">' + p.company_name + (p.trade_type ? ' (' + p.trade_type + ')' : '') + '</option>').join('')}
+        </select>
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-gray-600 mb-1">役割 <span class="text-red-500">*</span></label>
+        <select id="dp-role" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+          <option value="subcontractor">下請け（STCが元請けの場合）</option>
+          <option value="prime_contractor">元請け（STCが下請けの場合）</option>
+        </select>
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-gray-600 mb-1">契約金額（税抜） <span class="text-xs text-gray-400 font-normal">任意</span></label>
+        <div class="relative">
+          <span class="absolute left-3 top-2 text-gray-500 text-sm">\u00a5</span>
+          <input type="number" id="dp-amount" class="w-full pl-7 pr-3 py-2 border border-gray-300 rounded-lg text-sm" placeholder="0">
+        </div>
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-gray-600 mb-1">備考</label>
+        <input type="text" id="dp-notes" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" placeholder="備考">
+      </div>
+    </div>`;
+
+  showModal('協力会社を追加', content,
+    '<button onclick="submitAddDealPartner(\'' + dealId + '\')" class="px-4 py-2 text-sm bg-orange-600 text-white rounded-lg hover:bg-orange-700 font-medium"><i class="fas fa-plus mr-1"></i>追加</button>'
+    + '<button onclick="closeModal()" class="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">キャンセル</button>'
+  );
+}
+
+async function submitAddDealPartner(dealId) {
+  try {
+    await api('/partners/deal/' + dealId + '/add', { method: 'POST', body: JSON.stringify({
+      partner_id: document.getElementById('dp-partner').value,
+      role: document.getElementById('dp-role').value,
+      contract_amount: parseFloat(document.getElementById('dp-amount').value) || null,
+      notes: document.getElementById('dp-notes').value || null
+    })});
+    closeModal();
+    showToast('協力会社を追加しました');
+    renderPageContent();
+  } catch (err) { showToast(err.message, 'error'); }
+}
+
+async function showEditDealPartnerModal(dealId, dpId, partnerId, role, amount, notes) {
+  // 協力会社マスタ一覧を取得
+  let partners = [];
+  try { const pd = await api('/partners'); partners = pd.partners || []; } catch {}
+
+  const content = `
+    <div class="space-y-3">
+      <div>
+        <label class="block text-xs font-medium text-gray-600 mb-1">協力会社</label>
+        <select id="edp-partner" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-gray-50" disabled>
+          ${partners.map(p => '<option value="' + p.id + '"' + (p.id === partnerId ? ' selected' : '') + '>' + p.company_name + (p.trade_type ? ' (' + p.trade_type + ')' : '') + '</option>').join('')}
+        </select>
+        <p class="text-[10px] text-gray-400 mt-0.5">変更する場合は削除して再追加してください</p>
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-gray-600 mb-1">役割</label>
+        <select id="edp-role" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+          <option value="subcontractor" ${role === 'subcontractor' ? 'selected' : ''}>下請け</option>
+          <option value="prime_contractor" ${role === 'prime_contractor' ? 'selected' : ''}>元請け</option>
+        </select>
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-gray-600 mb-1">契約金額（税抜）</label>
+        <div class="relative">
+          <span class="absolute left-3 top-2 text-gray-500 text-sm">\u00a5</span>
+          <input type="number" id="edp-amount" value="${amount !== null && amount !== 'null' ? amount : ''}" class="w-full pl-7 pr-3 py-2 border border-gray-300 rounded-lg text-sm" placeholder="0">
+        </div>
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-gray-600 mb-1">備考</label>
+        <input type="text" id="edp-notes" value="${notes || ''}" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" placeholder="備考">
+      </div>
+    </div>`;
+
+  showModal('協力会社情報を編集', content,
+    '<button onclick="submitEditDealPartner(\'' + dpId + '\')" class="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"><i class="fas fa-save mr-1"></i>更新</button>'
+    + '<button onclick="closeModal()" class="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">キャンセル</button>'
+  );
+}
+
+async function submitEditDealPartner(dpId) {
+  try {
+    await api('/partners/deal-partner/' + dpId + '/update', { method: 'POST', body: JSON.stringify({
+      role: document.getElementById('edp-role').value,
+      contract_amount: parseFloat(document.getElementById('edp-amount').value) || null,
+      notes: document.getElementById('edp-notes').value || null
+    })});
+    closeModal();
+    showToast('協力会社情報を更新しました');
+    renderPageContent();
+  } catch (err) { showToast(err.message, 'error'); }
+}
+
+function deleteDealPartner(dpId, companyName) {
+  showConfirm('「' + companyName + '」をこの案件から削除しますか？', async () => {
+    try {
+      await api('/partners/deal-partner/' + dpId + '/delete', { method: 'POST' });
+      showToast('協力会社を削除しました');
+      renderPageContent();
+    } catch (err) { showToast(err.message, 'error'); }
+  });
 }
 
 // ====== 分割入金 モーダル・操作 ======
@@ -3129,6 +3337,148 @@ async function dismissFromEstimate(requestId) {
     try {
       await api('/deals/dismiss-from-estimate/' + requestId, { method: 'POST' });
       showToast('案件を見送りにしました');
+      renderPageContent();
+    } catch (err) { showToast(err.message, 'error'); }
+  });
+}
+
+// ====== 協力会社管理 ======
+async function renderPartnerList(main) {
+  const data = await api('/partners');
+  const partners = data.partners || [];
+
+  main.innerHTML = `
+    <div class="flex items-center justify-between mb-4">
+      <h1 class="text-xl font-bold text-gray-900"><i class="fas fa-handshake text-indigo-600 mr-2"></i>協力会社管理</h1>
+      <button onclick="showPartnerForm()" class="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+        <i class="fas fa-plus mr-1"></i>新規登録
+      </button>
+    </div>
+
+    ${partners.length === 0 ? `
+      <div class="bg-white rounded-lg border border-gray-200 p-8 text-center">
+        <i class="fas fa-handshake text-gray-300 text-4xl mb-3"></i>
+        <p class="text-gray-500">協力会社が登録されていません</p>
+      </div>
+    ` : `
+      <div class="bg-white rounded-lg border border-gray-200 overflow-hidden">
+        <table class="w-full text-sm">
+          <thead class="bg-gray-50 border-b border-gray-200">
+            <tr>
+              <th class="px-4 py-3 text-left font-medium text-gray-500">会社名</th>
+              <th class="px-4 py-3 text-left font-medium text-gray-500">代表者</th>
+              <th class="px-4 py-3 text-left font-medium text-gray-500">電話番号</th>
+              <th class="px-4 py-3 text-left font-medium text-gray-500">業種/工種</th>
+              <th class="px-4 py-3 text-left font-medium text-gray-500">状態</th>
+              <th class="px-4 py-3 text-center font-medium text-gray-500">操作</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-gray-100">
+            ${partners.map(p => `
+              <tr class="hover:bg-gray-50 ${!p.is_active ? 'opacity-50' : ''}">
+                <td class="px-4 py-3 font-medium">${p.company_name}</td>
+                <td class="px-4 py-3 text-gray-600">${p.representative_name || '-'}</td>
+                <td class="px-4 py-3 text-gray-600">${p.phone || '-'}</td>
+                <td class="px-4 py-3 text-gray-600">${p.trade_type || '-'}</td>
+                <td class="px-4 py-3">${p.is_active ? '<span class="badge badge-completed">有効</span>' : '<span class="badge badge-withdrawn">無効</span>'}</td>
+                <td class="px-4 py-3 text-center">
+                  <button onclick="showPartnerForm('${p.id}')" class="text-blue-600 hover:text-blue-800 mr-2" title="編集"><i class="fas fa-edit"></i></button>
+                  <button onclick="deletePartner('${p.id}','${p.company_name}')" class="text-red-500 hover:text-red-700" title="削除"><i class="fas fa-trash"></i></button>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `}`;
+}
+
+async function showPartnerForm(partnerId) {
+  let partner = null;
+  if (partnerId) {
+    const data = await api('/partners/' + partnerId);
+    partner = data.partner;
+  }
+
+  const title = partner ? '協力会社 編集' : '協力会社 新規登録';
+  const content = `
+    <form id="partner-form" class="space-y-3">
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">会社名 <span class="text-red-500">*</span></label>
+        <input type="text" id="pf-name" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" value="${partner?.company_name || ''}" placeholder="株式会社○○工業">
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">代表者名</label>
+        <input type="text" id="pf-rep" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" value="${partner?.representative_name || ''}" placeholder="山田 太郎">
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">電話番号</label>
+        <input type="text" id="pf-phone" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" value="${partner?.phone || ''}" placeholder="0566-XX-XXXX">
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">住所</label>
+        <input type="text" id="pf-address" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" value="${partner?.address || ''}" placeholder="愛知県高浜市...">
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">業種/工種</label>
+        <input type="text" id="pf-trade" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" value="${partner?.trade_type || ''}" placeholder="電気工事、塗装、防水 など">
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">備考</label>
+        <textarea id="pf-notes" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" rows="2">${partner?.notes || ''}</textarea>
+      </div>
+      ${partner ? `
+        <div>
+          <label class="flex items-center gap-2 text-sm">
+            <input type="checkbox" id="pf-active" ${partner.is_active ? 'checked' : ''}>
+            <span>有効</span>
+          </label>
+        </div>
+      ` : ''}
+    </form>`;
+
+  const actions = `
+    <button onclick="closeModal()" class="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">キャンセル</button>
+    <button onclick="submitPartnerForm('${partnerId || ''}')" class="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700">${partner ? '更新' : '登録'}</button>`;
+
+  showModal(title, content, actions);
+}
+
+async function submitPartnerForm(partnerId) {
+  const body = {
+    company_name: document.getElementById('pf-name').value,
+    representative_name: document.getElementById('pf-rep').value || null,
+    phone: document.getElementById('pf-phone').value || null,
+    address: document.getElementById('pf-address').value || null,
+    trade_type: document.getElementById('pf-trade').value || null,
+    notes: document.getElementById('pf-notes').value || null
+  };
+
+  if (partnerId) {
+    const activeEl = document.getElementById('pf-active');
+    body.is_active = activeEl ? (activeEl.checked ? 1 : 0) : 1;
+  }
+
+  try {
+    if (partnerId) {
+      await api('/partners/' + partnerId + '/update', { method: 'POST', body: JSON.stringify(body) });
+      showToast('協力会社を更新しました');
+    } else {
+      await api('/partners/create', { method: 'POST', body: JSON.stringify(body) });
+      showToast('協力会社を登録しました');
+    }
+    closeModal();
+    renderPageContent();
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+function deletePartner(id, name) {
+  showConfirm('「' + name + '」を削除しますか？', async () => {
+    try {
+      await api('/partners/' + id + '/delete', { method: 'POST' });
+      showToast('協力会社を削除/無効化しました');
       renderPageContent();
     } catch (err) { showToast(err.message, 'error'); }
   });

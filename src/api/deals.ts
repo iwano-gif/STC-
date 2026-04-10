@@ -214,7 +214,7 @@ dealRoutes.get('/export/csv', async (c) => {
   const deals = await c.env.DB.prepare(
     `SELECT d.*, r.request_number, r.type, r.title, r.client_name,
             r.amount, r.tax_rate, r.amount_with_tax, r.gross_profit_rate,
-            r.created_at as request_date, r.remarks,
+            r.prime_contractor_id, r.created_at as request_date, r.remarks,
             p.display_name as applicant_name
      FROM deal_tracking d
      JOIN requests r ON d.request_id = r.id
@@ -223,7 +223,7 @@ dealRoutes.get('/export/csv', async (c) => {
      ORDER BY d.deal_status, d.updated_at DESC`
   ).bind(...params).all()
 
-  // 各案件の入金情報を取得
+  // 各案件の入金情報と協力会社情報を取得
   const dealRows: any[] = []
   for (const deal of deals.results as any[]) {
     const payments = await c.env.DB.prepare(
@@ -231,7 +231,29 @@ dealRoutes.get('/export/csv', async (c) => {
               COUNT(*) as payment_count
        FROM deal_payments WHERE deal_id = ?`
     ).bind(deal.id).first()
-    dealRows.push({ ...deal, payments })
+
+    // 協力会社情報
+    const partners = await c.env.DB.prepare(
+      `SELECT dp.role, dp.contract_amount, pc.company_name
+       FROM deal_partners dp
+       JOIN partner_companies pc ON dp.partner_id = pc.id
+       WHERE dp.deal_id = ?
+       ORDER BY dp.role ASC, pc.company_name ASC`
+    ).bind(deal.id).all()
+
+    // 元請け会社名
+    let primeContractorName = ''
+    if ((deal as any).prime_contractor_id) {
+      const pc = await c.env.DB.prepare('SELECT company_name FROM partner_companies WHERE id = ?')
+        .bind((deal as any).prime_contractor_id).first()
+      if (pc) primeContractorName = pc.company_name as string
+    }
+
+    const subs = (partners.results || []).filter((p: any) => p.role === 'subcontractor')
+    const subNames = subs.map((p: any) => p.company_name).join(' / ')
+    const subCostTotal = subs.reduce((s: number, p: any) => s + (p.contract_amount || 0), 0)
+
+    dealRows.push({ ...deal, payments, primeContractorName, subNames, subCostTotal })
   }
 
   // ステータスラベル
@@ -248,6 +270,7 @@ dealRoutes.get('/export/csv', async (c) => {
   // CSV生成
   const headers = [
     '申請番号', 'ステータス', '種別', '件名', '取引先', '申請者',
+    '元請け会社', '下請け会社', '下請け原価合計',
     '見積金額(税抜)', '税率', '見積金額(税込)', '粗利率(%)',
     '契約金額(税抜)', '契約税率', '契約金額(税込)',
     '原価', '粗利額', '粗利率(実績%)',
@@ -279,6 +302,9 @@ dealRoutes.get('/export/csv', async (c) => {
       d.title,
       d.client_name,
       d.applicant_name,
+      d.primeContractorName || '',
+      d.subNames || '',
+      d.subCostTotal || '',
       d.amount || '',
       d.tax_rate ? `${Math.round(d.tax_rate * 100)}%` : '',
       d.amount_with_tax || '',
@@ -323,7 +349,8 @@ dealRoutes.get('/:id', async (c) => {
   const id = c.req.param('id')
   const deal = await c.env.DB.prepare(
     `SELECT d.*, r.request_number, r.type, r.title, r.client_name,
-            r.amount, r.tax_rate, r.amount_with_tax, r.gross_profit_rate, r.created_at as request_date, r.remarks,
+            r.amount, r.tax_rate, r.amount_with_tax, r.gross_profit_rate, r.prime_contractor_id,
+            r.created_at as request_date, r.remarks,
             p.display_name as applicant_name
      FROM deal_tracking d
      JOIN requests r ON d.request_id = r.id
@@ -338,7 +365,25 @@ dealRoutes.get('/:id', async (c) => {
     'SELECT * FROM deal_payments WHERE deal_id = ? ORDER BY expected_date ASC, created_at ASC'
   ).bind(id).all()
 
-  return c.json({ deal, payments: payments.results })
+  // 協力会社一覧（下請け・元請け）
+  const partners = await c.env.DB.prepare(
+    `SELECT dp.*, pc.company_name, pc.representative_name, pc.phone, pc.trade_type
+     FROM deal_partners dp
+     JOIN partner_companies pc ON dp.partner_id = pc.id
+     WHERE dp.deal_id = ?
+     ORDER BY dp.role ASC, pc.company_name ASC`
+  ).bind(id).all()
+
+  // 元請け会社名を取得（prime_contractor_id がある場合）
+  let primeContractorName = null
+  if ((deal as any).prime_contractor_id) {
+    const pc = await c.env.DB.prepare(
+      'SELECT company_name FROM partner_companies WHERE id = ?'
+    ).bind((deal as any).prime_contractor_id).first()
+    if (pc) primeContractorName = pc.company_name
+  }
+
+  return c.json({ deal: { ...deal as any, prime_contractor_name: primeContractorName }, payments: payments.results, partners: partners.results })
 })
 
 // ====== リテラルPOSTルートを /:id/* より前に配置 ======
@@ -540,6 +585,7 @@ dealRoutes.post('/:id/delete', async (c) => {
   if (!admin) return c.json({ error: '管理者権限が必要です' }, 403)
 
   const id = c.req.param('id')
+  await c.env.DB.prepare('DELETE FROM deal_partners WHERE deal_id = ?').bind(id).run()
   await c.env.DB.prepare('DELETE FROM deal_payments WHERE deal_id = ?').bind(id).run()
   await c.env.DB.prepare('DELETE FROM deal_tracking WHERE id = ?').bind(id).run()
 
