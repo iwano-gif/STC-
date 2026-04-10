@@ -119,8 +119,23 @@ requestRoutes.get('/:id', async (c) => {
     if (pc) primeContractorName = pc.company_name
   }
 
+  // 下請け会社名を取得
+  let subcontractors: any[] = []
+  if ((request as any).subcontractor_ids) {
+    try {
+      const ids = JSON.parse((request as any).subcontractor_ids)
+      if (Array.isArray(ids) && ids.length > 0) {
+        const placeholders = ids.map(() => '?').join(',')
+        const subs = await c.env.DB.prepare(
+          `SELECT id, company_name, trade_type FROM partner_companies WHERE id IN (${placeholders})`
+        ).bind(...ids).all()
+        subcontractors = subs.results || []
+      }
+    } catch {}
+  }
+
   return c.json({
-    request: { ...request as any, prime_contractor_name: primeContractorName },
+    request: { ...request as any, prime_contractor_name: primeContractorName, subcontractors },
     steps: steps.results,
     files: files.results
   })
@@ -132,7 +147,7 @@ requestRoutes.post('/', async (c) => {
   if (!user) return c.json({ error: '認証が必要です' }, 401)
 
   const body = await c.req.json()
-  const { type, title, client_name, amount_with_tax: inputAmountWithTax, tax_rate, remarks, gross_profit_rate, prime_contractor_id } = body
+  const { type, title, client_name, amount_with_tax: inputAmountWithTax, tax_rate, remarks, gross_profit_rate, prime_contractor_id, subcontractor_ids } = body
 
   // Validation
   if (!type || !['estimate', 'invoice'].includes(type)) {
@@ -193,11 +208,14 @@ requestRoutes.post('/', async (c) => {
     return c.json({ error: '粗利率は0〜100の範囲で入力してください' }, 400)
   }
 
+  // Validate subcontractor_ids (optional, array of partner IDs)
+  const subIds = Array.isArray(subcontractor_ids) && subcontractor_ids.length > 0 ? JSON.stringify(subcontractor_ids) : null
+
   // Insert request
   await c.env.DB.prepare(
-    `INSERT INTO requests (id, request_number, type, applicant_id, title, client_name, amount, tax_rate, amount_with_tax, remarks, gross_profit_rate, prime_contractor_id, status, current_step, version)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 1, 1)`
-  ).bind(requestId, requestNumber, type, user.userId, title, client_name, amount, tax_rate, amount_with_tax, remarks || null, profitRate, prime_contractor_id || null).run()
+    `INSERT INTO requests (id, request_number, type, applicant_id, title, client_name, amount, tax_rate, amount_with_tax, remarks, gross_profit_rate, prime_contractor_id, subcontractor_ids, status, current_step, version)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 1, 1)`
+  ).bind(requestId, requestNumber, type, user.userId, title, client_name, amount, tax_rate, amount_with_tax, remarks || null, profitRate, prime_contractor_id || null, subIds).run()
 
   // Create approval steps
   let stepOrder = 1
@@ -334,7 +352,7 @@ requestRoutes.post('/:id/resubmit', async (c) => {
   }
 
   const body = await c.req.json()
-  const { type, title, client_name, amount_with_tax, tax_rate, remarks, gross_profit_rate, prime_contractor_id } = body
+  const { type, title, client_name, amount_with_tax, tax_rate, remarks, gross_profit_rate, prime_contractor_id, subcontractor_ids } = body
 
   // Validation (same as create)
   if (!type || !['estimate', 'invoice'].includes(type)) return c.json({ error: '申請種別を選択してください' }, 400)
@@ -354,12 +372,15 @@ requestRoutes.post('/:id/resubmit', async (c) => {
     return c.json({ error: '粗利率は0〜100の範囲で入力してください' }, 400)
   }
 
+  // Validate subcontractor_ids (optional)
+  const subIds = Array.isArray(subcontractor_ids) && subcontractor_ids.length > 0 ? JSON.stringify(subcontractor_ids) : null
+
   // Update request
   await c.env.DB.prepare(
-    `UPDATE requests SET type=?, title=?, client_name=?, amount=?, tax_rate=?, amount_with_tax=?, remarks=?, gross_profit_rate=?, prime_contractor_id=?,
+    `UPDATE requests SET type=?, title=?, client_name=?, amount=?, tax_rate=?, amount_with_tax=?, remarks=?, gross_profit_rate=?, prime_contractor_id=?, subcontractor_ids=?,
      status='pending', current_step=1, version=?, updated_at=datetime('now')
      WHERE id = ?`
-  ).bind(type, title, client_name, amount, tax_rate, computedAmountWithTax, remarks || null, profitRate, prime_contractor_id || null, newVersion, id).run()
+  ).bind(type, title, client_name, amount, tax_rate, computedAmountWithTax, remarks || null, profitRate, prime_contractor_id || null, subIds, newVersion, id).run()
 
   // Create new approval steps with new version
   const approvers = await c.env.DB.prepare(

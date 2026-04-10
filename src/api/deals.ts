@@ -412,6 +412,20 @@ dealRoutes.post('/create', async (c) => {
     `INSERT INTO deal_tracking (id, request_id, deal_status) VALUES (?, ?, 'estimate_approved')`
   ).bind(id, requestId).run()
 
+  // 申請の subcontractor_ids を deal_partners へ自動マッピング
+  if ((request as any).subcontractor_ids) {
+    try {
+      const subIds = JSON.parse((request as any).subcontractor_ids as string)
+      if (Array.isArray(subIds)) {
+        for (const partnerId of subIds) {
+          await c.env.DB.prepare(
+            `INSERT INTO deal_partners (id, deal_id, partner_id, role) VALUES (?, ?, ?, 'subcontractor')`
+          ).bind(generateId(), id, partnerId).run()
+        }
+      }
+    } catch {}
+  }
+
   await c.env.DB.prepare(
     `INSERT INTO audit_logs (id, user_id, action, target_table, target_id, detail)
      VALUES (?, ?, 'deal_created', 'deal_tracking', ?, ?)`
@@ -461,6 +475,20 @@ dealRoutes.post('/confirm-from-estimate/:requestId', async (c) => {
   await c.env.DB.prepare(
     `INSERT INTO deal_tracking (id, request_id, deal_status) VALUES (?, ?, 'contracted')`
   ).bind(id, requestId).run()
+
+  // 申請の subcontractor_ids を deal_partners へ自動マッピング
+  if ((request as any).subcontractor_ids) {
+    try {
+      const subIds = JSON.parse((request as any).subcontractor_ids as string)
+      if (Array.isArray(subIds)) {
+        for (const partnerId of subIds) {
+          await c.env.DB.prepare(
+            `INSERT INTO deal_partners (id, deal_id, partner_id, role) VALUES (?, ?, ?, 'subcontractor')`
+          ).bind(generateId(), id, partnerId).run()
+        }
+      }
+    } catch {}
+  }
 
   await c.env.DB.prepare(
     `INSERT INTO audit_logs (id, user_id, action, target_table, target_id, detail)

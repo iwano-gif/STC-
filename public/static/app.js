@@ -609,6 +609,27 @@ async function renderNewRequest(main) {
             ${partners.map(p => '<option value="' + p.id + '">' + p.company_name + (p.trade_type ? ' (' + p.trade_type + ')' : '') + '</option>').join('')}
           </select>
         </div>
+
+        <!-- 下請け会社 -->
+        <div class="bg-orange-50 border border-orange-200 rounded-lg p-4">
+          <label class="block text-sm font-medium text-orange-800 mb-1">
+            <i class="fas fa-hard-hat text-orange-600 mr-1"></i>下請け会社（協力会社）
+          </label>
+          <p class="text-xs text-orange-600 mb-2">この案件に参加する下請け会社を選択してください（任意・複数可）</p>
+          <div id="req-sub-container">
+            <div class="flex gap-2 mb-2">
+              <select id="req-sub-select" class="flex-1 px-3 py-2 border border-orange-300 rounded-lg text-sm focus:ring-2 focus:ring-orange-500">
+                <option value="">下請け会社を選択...</option>
+                ${partners.map(p => '<option value="' + p.id + '" data-name="' + p.company_name + (p.trade_type ? ' (' + p.trade_type + ')' : '') + '">' + p.company_name + (p.trade_type ? ' (' + p.trade_type + ')' : '') + '</option>').join('')}
+              </select>
+              <button type="button" id="req-sub-add-btn" class="px-3 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 text-sm">
+                <i class="fas fa-plus"></i>
+              </button>
+            </div>
+            <div id="req-sub-list" class="space-y-1"></div>
+          </div>
+        </div>
+
         <div class="grid grid-cols-2 gap-4">
           <div>
             <label class="block text-sm font-medium text-gray-700 mb-1">金額（税込）<span class="text-red-500">*</span></label>
@@ -680,6 +701,10 @@ async function renderNewRequest(main) {
   
   setupPdfDropZoneWithAutofill('pdf-drop-zone', 'pdf-file-input', 'pdf-select-btn', 'pdf-file-list', pendingFiles, 'new');
   
+  // 下請け会社マルチセレクト
+  const selectedSubs = [];
+  setupSubcontractorPicker('req-sub-select', 'req-sub-add-btn', 'req-sub-list', selectedSubs);
+  
   document.getElementById('request-form').onsubmit = async (e) => {
     e.preventDefault();
     const errEl = document.getElementById('req-error');
@@ -707,7 +732,8 @@ async function renderNewRequest(main) {
         tax_rate: parseFloat(document.getElementById('req-tax').value),
         remarks: document.getElementById('req-remarks').value,
         gross_profit_rate: profitRateInput !== '' ? parseFloat(profitRateInput) : null,
-        prime_contractor_id: document.getElementById('req-prime-contractor').value || null
+        prime_contractor_id: document.getElementById('req-prime-contractor').value || null,
+        subcontractor_ids: selectedSubs.length > 0 ? selectedSubs.map(s => s.id) : null
       };
       const res = await api('/requests', { method: 'POST', body: JSON.stringify(body) });
       
@@ -744,6 +770,50 @@ async function uploadPdfFile(requestId, file) {
   formData.append('file', file);
   
   return await api('/files/upload', { method: 'POST', body: formData });
+}
+
+// ============================================================
+// SUBCONTRACTOR MULTI-SELECT HELPER
+// ============================================================
+function setupSubcontractorPicker(selectId, addBtnId, listId, selectedArray) {
+  const addBtn = document.getElementById(addBtnId);
+  if (!addBtn) return;
+  addBtn.onclick = () => {
+    const sel = document.getElementById(selectId);
+    const val = sel.value;
+    if (!val) return;
+    // 既に追加済みなら無視
+    if (selectedArray.find(s => s.id === val)) {
+      showToast('既に追加されています', 'error');
+      return;
+    }
+    const name = sel.options[sel.selectedIndex].getAttribute('data-name') || sel.options[sel.selectedIndex].text;
+    selectedArray.push({ id: val, name: name });
+    renderSubList(listId, selectedArray, selectId);
+    sel.value = '';
+  };
+}
+
+function renderSubList(listId, selectedArray, selectId) {
+  const listEl = document.getElementById(listId);
+  if (!listEl) return;
+  if (selectedArray.length === 0) {
+    listEl.innerHTML = '';
+    return;
+  }
+  listEl.innerHTML = selectedArray.map((s, i) => `
+    <div class="flex items-center justify-between bg-white border border-orange-200 rounded px-3 py-1.5">
+      <span class="text-sm text-gray-800"><i class="fas fa-building text-orange-400 mr-1"></i>${s.name}</span>
+      <button type="button" data-idx="${i}" class="sub-remove-btn text-gray-400 hover:text-red-500 text-xs ml-2"><i class="fas fa-times"></i></button>
+    </div>
+  `).join('');
+  listEl.querySelectorAll('.sub-remove-btn').forEach(btn => {
+    btn.onclick = () => {
+      const idx = parseInt(btn.getAttribute('data-idx'));
+      selectedArray.splice(idx, 1);
+      renderSubList(listId, selectedArray, selectId);
+    };
+  });
 }
 
 // Setup drag & drop zone for PDF
@@ -1211,6 +1281,7 @@ async function renderRequestDetail(main) {
         <div><span class="text-gray-500">件名</span><p class="font-medium">${req.title}</p></div>
         <div><span class="text-gray-500">取引先</span><p class="font-medium">${req.client_name}</p></div>
         ${req.prime_contractor_name ? `<div><span class="text-gray-500">元請け会社</span><p class="font-medium"><i class="fas fa-building text-indigo-400 mr-1"></i>${req.prime_contractor_name}</p></div>` : ''}
+        ${req.subcontractors && req.subcontractors.length > 0 ? `<div class="sm:col-span-2"><span class="text-gray-500">下請け会社</span><div class="flex flex-wrap gap-2 mt-1">${req.subcontractors.map(s => `<span class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-orange-100 text-orange-800"><i class="fas fa-hard-hat mr-1"></i>${s.company_name}${s.trade_type ? ' (' + s.trade_type + ')' : ''}</span>`).join('')}</div></div>` : ''}
         <div><span class="text-gray-500">金額（税込）</span><p class="font-medium text-lg">${formatCurrency(req.amount_with_tax)}</p></div>
         <div><span class="text-gray-500">税率</span><p class="font-medium">${req.tax_rate * 100}%</p></div>
         <div><span class="text-gray-500">税抜金額</span><p class="font-medium">${formatCurrency(req.amount)}</p></div>
@@ -1675,6 +1746,27 @@ async function renderEditRequest(main) {
             ${partners.map(p => '<option value="' + p.id + '"' + (req.prime_contractor_id === p.id ? ' selected' : '') + '>' + p.company_name + (p.trade_type ? ' (' + p.trade_type + ')' : '') + '</option>').join('')}
           </select>
         </div>
+
+        <!-- 下請け会社 -->
+        <div class="bg-orange-50 border border-orange-200 rounded-lg p-4">
+          <label class="block text-sm font-medium text-orange-800 mb-1">
+            <i class="fas fa-hard-hat text-orange-600 mr-1"></i>下請け会社（協力会社）
+          </label>
+          <p class="text-xs text-orange-600 mb-2">この案件に参加する下請け会社を選択してください（任意・複数可）</p>
+          <div id="edit-sub-container">
+            <div class="flex gap-2 mb-2">
+              <select id="edit-sub-select" class="flex-1 px-3 py-2 border border-orange-300 rounded-lg text-sm focus:ring-2 focus:ring-orange-500">
+                <option value="">下請け会社を選択...</option>
+                ${partners.map(p => '<option value="' + p.id + '" data-name="' + p.company_name + (p.trade_type ? ' (' + p.trade_type + ')' : '') + '">' + p.company_name + (p.trade_type ? ' (' + p.trade_type + ')' : '') + '</option>').join('')}
+              </select>
+              <button type="button" id="edit-sub-add-btn" class="px-3 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 text-sm">
+                <i class="fas fa-plus"></i>
+              </button>
+            </div>
+            <div id="edit-sub-list" class="space-y-1"></div>
+          </div>
+        </div>
+
         <div class="grid grid-cols-2 gap-4">
           <div>
             <label class="block text-sm font-medium text-gray-700 mb-1">金額（税込）<span class="text-red-500">*</span></label>
@@ -1789,6 +1881,17 @@ async function renderEditRequest(main) {
   
   setupPdfDropZoneWithAutofill('edit-pdf-drop-zone', 'edit-pdf-file-input', 'edit-pdf-select-btn', 'edit-pdf-file-list', newPendingFiles, 'edit');
   
+  // 下請け会社マルチセレクト（既存データを復元）
+  const editSelectedSubs = [];
+  setupSubcontractorPicker('edit-sub-select', 'edit-sub-add-btn', 'edit-sub-list', editSelectedSubs);
+  // 既存の下請け情報を復元
+  if (req.subcontractors && req.subcontractors.length > 0) {
+    for (const sub of req.subcontractors) {
+      editSelectedSubs.push({ id: sub.id, name: sub.company_name + (sub.trade_type ? ' (' + sub.trade_type + ')' : '') });
+      renderSubList('edit-sub-list', editSelectedSubs, 'edit-sub-select');
+    }
+  }
+  
   // Mark file for deletion
   window.markFileForDeletion = function(btn, fileId, fileName) {
     const row = btn.closest('[data-file-id]');
@@ -1835,7 +1938,8 @@ async function renderEditRequest(main) {
         tax_rate: parseFloat(document.getElementById('edit-tax').value),
         remarks: document.getElementById('edit-remarks').value,
         gross_profit_rate: editProfitRateInput !== '' ? parseFloat(editProfitRateInput) : null,
-        prime_contractor_id: document.getElementById('edit-prime-contractor').value || null
+        prime_contractor_id: document.getElementById('edit-prime-contractor').value || null,
+        subcontractor_ids: editSelectedSubs.length > 0 ? editSelectedSubs.map(s => s.id) : null
       };
       await api(`/requests/${id}/resubmit`, { method: 'POST', body: JSON.stringify(body) });
       
