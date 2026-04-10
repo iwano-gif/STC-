@@ -98,6 +98,18 @@ function showConfirm(message, onConfirm) {
 }
 
 // Auth
+function togglePasswordVisibility() {
+  const pw = document.getElementById('login-password');
+  const icon = document.getElementById('pw-toggle-icon');
+  if (pw.type === 'password') {
+    pw.type = 'text';
+    icon.classList.replace('fa-eye', 'fa-eye-slash');
+  } else {
+    pw.type = 'password';
+    icon.classList.replace('fa-eye-slash', 'fa-eye');
+  }
+}
+
 async function login(email, password) {
   const data = await api('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
   state.token = data.token;
@@ -220,15 +232,20 @@ function renderLogin(app) {
         <form id="login-form" class="space-y-4">
           <div>
             <label class="block text-sm font-medium text-gray-700 mb-1">ログインID（メールアドレス）</label>
-            <input type="text" id="login-email" required
+            <input type="text" id="login-email" required autocomplete="off"
               class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm" 
               placeholder="user@example.com または ログインID">
           </div>
           <div>
             <label class="block text-sm font-medium text-gray-700 mb-1">パスワード</label>
-            <input type="password" id="login-password" required
-              class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
-              placeholder="パスワード">
+            <div class="relative">
+              <input type="password" id="login-password" required autocomplete="off"
+                class="w-full px-3 py-2 pr-10 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                placeholder="パスワード">
+              <button type="button" onclick="togglePasswordVisibility()" class="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 p-1">
+                <i id="pw-toggle-icon" class="fas fa-eye text-sm"></i>
+              </button>
+            </div>
           </div>
           <div id="login-error" class="text-red-600 text-sm hidden"></div>
           <button type="submit" class="w-full bg-blue-600 text-white py-2.5 rounded-lg hover:bg-blue-700 font-medium text-sm transition-colors">
@@ -238,6 +255,9 @@ function renderLogin(app) {
       </div>
     </div>`;
   
+  // パスワード欄を空にしてブラウザ自動入力を防止
+  document.getElementById('login-password').value = '';
+
   document.getElementById('login-form').onsubmit = async (e) => {
     e.preventDefault();
     const errEl = document.getElementById('login-error');
