@@ -299,7 +299,7 @@ leadRoutes.get('/dashboard/summary', async (c) => {
      FROM deal_tracking d
      JOIN requests r ON d.request_id = r.id
      LEFT JOIN deal_partners dp ON d.id = dp.deal_id
-     WHERE d.deal_status IN ('contracted','in_progress','invoice_issued','payment_received','completed')
+     WHERE d.deal_status != 'lost'
      GROUP BY d.id`
   ).bind().all()
 
