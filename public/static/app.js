@@ -157,7 +157,10 @@ function getPath(page, params = {}) {
     'admin-deals': '/admin/deals',
     'admin-deal-detail': `/admin/deals/${params.id}`,
     'deal-dashboard': '/admin/deal-dashboard',
-    'admin-partners': '/admin/partners'
+    'admin-partners': '/admin/partners',
+    'leads': '/leads',
+    'lead-detail': `/leads/${params.id}`,
+    'lead-dashboard': '/leads/dashboard'
   };
   return paths[page] || '/';
 }
@@ -344,6 +347,15 @@ function renderApp(app) {
             ` : ''}
             ${canSeeDeal ? `
               <div class="pt-3 mt-3 border-t border-gray-200">
+                <p class="px-3 py-1 text-xs font-semibold text-gray-400 uppercase">リード管理</p>
+              </div>
+              <a href="/leads/dashboard" onclick="event.preventDefault();navigate('lead-dashboard')" class="sidebar-link ${state.currentPage==='lead-dashboard'?'active':''}">
+                <i class="fas fa-chart-pie w-5 text-center"></i><span>売上予測</span>
+              </a>
+              <a href="/leads" onclick="event.preventDefault();navigate('leads')" class="sidebar-link ${state.currentPage==='leads'||state.currentPage==='lead-detail'?'active':''}">
+                <i class="fas fa-funnel-dollar w-5 text-center"></i><span>リード一覧</span>
+              </a>
+              <div class="pt-3 mt-3 border-t border-gray-200">
                 <p class="px-3 py-1 text-xs font-semibold text-gray-400 uppercase">${isAdmin ? '案件管理' : '案件チェック'}</p>
               </div>
               <a href="/admin/deal-dashboard" onclick="event.preventDefault();navigate('deal-dashboard')" class="sidebar-link ${state.currentPage==='deal-dashboard'?'active':''}">
@@ -395,6 +407,9 @@ async function renderPageContent() {
       case 'admin-deal-detail': await renderDealDetail(main); break;
       case 'deal-dashboard': await renderDealDashboard(main); break;
       case 'admin-partners': await renderPartnerList(main); break;
+      case 'leads': await renderLeadList(main); break;
+      case 'lead-detail': await renderLeadDetail(main); break;
+      case 'lead-dashboard': await renderLeadDashboard(main); break;
       default: await renderDashboard(main);
     }
   } catch (err) {
@@ -549,8 +564,14 @@ async function renderNewRequest(main) {
   let partners = [];
   try { const pd = await api('/partners'); partners = pd.partners || []; } catch {}
 
+  // リードからの引き継ぎ
+  const fromLead = state.pageParams?.from_lead || '';
+  const prefillTitle = state.pageParams?.title || '';
+  const prefillClient = state.pageParams?.client || '';
+
   main.innerHTML = `
     <h1 class="text-xl font-bold text-gray-900 mb-4">新規申請</h1>
+    ${fromLead ? `<div class="bg-indigo-50 border border-indigo-200 rounded-lg p-3 mb-4 text-sm text-indigo-800"><i class="fas fa-link mr-1"></i>リードからの申請作成</div>` : ''}
     <div class="bg-white border border-gray-200 rounded-lg p-6 max-w-2xl">
       <form id="request-form" class="space-y-5">
         
@@ -596,11 +617,11 @@ async function renderNewRequest(main) {
         </div>
         <div>
           <label class="block text-sm font-medium text-gray-700 mb-1">件名・案件名 <span class="text-red-500">*</span></label>
-          <input type="text" id="req-title" required maxlength="100" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500" placeholder="案件名を入力">
+          <input type="text" id="req-title" required maxlength="100" value="${prefillTitle}" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500" placeholder="案件名を入力">
         </div>
         <div>
           <label class="block text-sm font-medium text-gray-700 mb-1">取引先名 <span class="text-red-500">*</span></label>
-          <input type="text" id="req-client" required maxlength="100" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500" placeholder="取引先名を入力">
+          <input type="text" id="req-client" required maxlength="100" value="${prefillClient}" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500" placeholder="取引先名を入力">
         </div>
         <div>
           <label class="block text-sm font-medium text-gray-700 mb-1">元請け会社 <span class="text-xs text-gray-400 font-normal">（STCが下請けの場合）</span></label>
@@ -3777,6 +3798,506 @@ async function exportDealsCsv(statusFilter) {
   } catch (err) {
     showToast(err.message, 'error');
   }
+}
+
+// ============================================================
+// LEAD MANAGEMENT (リード管理)
+// ============================================================
+const LEAD_STAGES = {
+  inquiry: { label: '問合せ', color: 'gray', bg: 'bg-gray-100 text-gray-800' },
+  survey: { label: '現調・ヒアリング', color: 'blue', bg: 'bg-blue-100 text-blue-800' },
+  estimating: { label: '見積作成中', color: 'yellow', bg: 'bg-yellow-100 text-yellow-800' },
+  submitted: { label: '見積提出済', color: 'orange', bg: 'bg-orange-100 text-orange-800' },
+  negotiation: { label: '交渉中', color: 'purple', bg: 'bg-purple-100 text-purple-800' },
+  won: { label: '受注確定', color: 'green', bg: 'bg-green-100 text-green-800' },
+  lost: { label: '見送り', color: 'red', bg: 'bg-red-100 text-red-800' }
+};
+
+function leadStageBadge(stage) {
+  const s = LEAD_STAGES[stage] || { label: stage, bg: 'bg-gray-100 text-gray-800' };
+  return `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${s.bg}">${s.label}</span>`;
+}
+
+// ---- LEAD LIST ----
+async function renderLeadList(main) {
+  const stageFilter = state.pageParams?.stage || '';
+  const keyword = state.pageParams?.keyword || '';
+  const data = await api(`/leads?stage=${stageFilter}&keyword=${encodeURIComponent(keyword)}`);
+  const leads = data.leads || [];
+  const summary = data.summary || [];
+
+  // Active lead stats
+  const activeLeads = leads.filter(l => l.stage !== 'won' && l.stage !== 'lost');
+  const totalAmount = activeLeads.reduce((s, l) => s + (l.estimated_amount || 0), 0);
+
+  main.innerHTML = `
+    <div class="flex items-center justify-between mb-4">
+      <h1 class="text-xl font-bold text-gray-900"><i class="fas fa-funnel-dollar text-indigo-500 mr-2"></i>リード管理</h1>
+      <button onclick="showLeadFormModal()" class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm font-medium">
+        <i class="fas fa-plus mr-1"></i>新規リード
+      </button>
+    </div>
+
+    <!-- Summary Cards -->
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+      <div class="bg-white border rounded-lg p-3">
+        <p class="text-xs text-gray-500">進行中リード</p>
+        <p class="text-xl font-bold text-indigo-600">${activeLeads.length}<span class="text-sm font-normal text-gray-400">件</span></p>
+      </div>
+      <div class="bg-white border rounded-lg p-3">
+        <p class="text-xs text-gray-500">見込み総額</p>
+        <p class="text-lg font-bold text-gray-900">${formatCurrency(totalAmount)}</p>
+      </div>
+      <div class="bg-white border rounded-lg p-3">
+        <p class="text-xs text-gray-500">受注確定</p>
+        <p class="text-xl font-bold text-green-600">${leads.filter(l => l.stage === 'won').length}<span class="text-sm font-normal text-gray-400">件</span></p>
+      </div>
+      <div class="bg-white border rounded-lg p-3">
+        <p class="text-xs text-gray-500">見送り</p>
+        <p class="text-xl font-bold text-red-500">${leads.filter(l => l.stage === 'lost').length}<span class="text-sm font-normal text-gray-400">件</span></p>
+      </div>
+    </div>
+
+    <!-- Filters -->
+    <div class="bg-white border rounded-lg p-3 mb-4 flex flex-wrap gap-3 items-center">
+      <select id="lead-filter-stage" class="px-3 py-1.5 border rounded-lg text-sm" onchange="applyLeadFilters()">
+        <option value="">全ステージ</option>
+        ${Object.entries(LEAD_STAGES).map(([k,v]) => `<option value="${k}" ${stageFilter===k?'selected':''}>${v.label}</option>`).join('')}
+      </select>
+      <input type="text" id="lead-filter-keyword" value="${keyword}" placeholder="案件名・取引先で検索" class="px-3 py-1.5 border rounded-lg text-sm flex-1 min-w-[180px]" onkeyup="if(event.key==='Enter')applyLeadFilters()">
+      <button onclick="applyLeadFilters()" class="px-3 py-1.5 bg-gray-100 border rounded-lg text-sm hover:bg-gray-200"><i class="fas fa-search"></i></button>
+    </div>
+
+    <!-- Lead Table -->
+    <div class="bg-white border rounded-lg overflow-hidden">
+      ${leads.length === 0 ? `
+        <div class="text-center py-12 text-gray-400">
+          <i class="fas fa-funnel-dollar text-4xl mb-3"></i>
+          <p>リードがありません</p>
+          <button onclick="showLeadFormModal()" class="mt-3 text-indigo-600 hover:text-indigo-800 text-sm">最初のリードを登録する</button>
+        </div>
+      ` : `
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead class="bg-gray-50 border-b">
+              <tr>
+                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500">案件名</th>
+                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500">取引先</th>
+                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500">概算金額</th>
+                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500">ステージ</th>
+                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500">確度</th>
+                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500">担当</th>
+                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500">更新日</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-100">
+              ${leads.map(l => `
+                <tr class="hover:bg-gray-50 cursor-pointer" onclick="navigate('lead-detail',{id:'${l.id}'})">
+                  <td class="px-3 py-2.5 font-medium text-indigo-700">${l.lead_name}</td>
+                  <td class="px-3 py-2.5 text-gray-600">${l.client_name || '-'}</td>
+                  <td class="px-3 py-2.5 text-gray-900">${l.estimated_amount ? formatCurrency(l.estimated_amount) : '-'}</td>
+                  <td class="px-3 py-2.5">
+                    <select class="text-xs border rounded px-1.5 py-0.5 ${LEAD_STAGES[l.stage]?.bg || ''}" onchange="changeLeadStage(event,'${l.id}',this.value)" onclick="event.stopPropagation()">
+                      ${Object.entries(LEAD_STAGES).map(([k,v]) => `<option value="${k}" ${l.stage===k?'selected':''}>${v.label}</option>`).join('')}
+                    </select>
+                  </td>
+                  <td class="px-3 py-2.5 text-gray-600">${l.probability != null ? l.probability + '%' : '-'}</td>
+                  <td class="px-3 py-2.5 text-gray-600 text-xs">${l.owner_name}</td>
+                  <td class="px-3 py-2.5 text-gray-400 text-xs">${formatDate(l.updated_at)}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      `}
+    </div>`;
+}
+
+function applyLeadFilters() {
+  navigate('leads', {
+    stage: document.getElementById('lead-filter-stage').value,
+    keyword: document.getElementById('lead-filter-keyword').value
+  });
+}
+
+async function changeLeadStage(event, leadId, newStage) {
+  event.stopPropagation();
+  try {
+    await api(`/leads/${leadId}/stage`, { method: 'POST', body: JSON.stringify({ stage: newStage }) });
+    showToast('ステージを更新しました');
+    renderPageContent();
+  } catch (err) { showToast(err.message, 'error'); }
+}
+
+// ---- LEAD FORM MODAL ----
+async function showLeadFormModal(leadData) {
+  const isEdit = !!leadData;
+  let partners = [];
+  try { const pd = await api('/partners'); partners = pd.partners || []; } catch {}
+
+  // Get users for owner dropdown (admin/approver only)
+  let owners = [];
+  try { const ud = await api('/dashboard/active-users'); owners = ud.users || []; } catch {}
+
+  showModal(isEdit ? 'リード編集' : '新規リード登録', `
+    <div class="space-y-4 max-h-[60vh] overflow-y-auto pr-1">
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">案件名 <span class="text-red-500">*</span></label>
+        <input type="text" id="lead-name" value="${isEdit ? (leadData.lead_name || '') : ''}" maxlength="100" class="w-full px-3 py-2 border rounded-lg text-sm" placeholder="例: ○○邸外壁塗装">
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">取引先・施主名</label>
+          <input type="text" id="lead-client" value="${isEdit ? (leadData.client_name || '') : ''}" class="w-full px-3 py-2 border rounded-lg text-sm" placeholder="取引先名">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">連絡先</label>
+          <input type="text" id="lead-contact" value="${isEdit ? (leadData.contact_info || '') : ''}" class="w-full px-3 py-2 border rounded-lg text-sm" placeholder="電話・メール等">
+        </div>
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">概算金額（税抜）</label>
+          <div class="relative">
+            <span class="absolute left-3 top-2 text-gray-500 text-sm">\u00a5</span>
+            <input type="number" id="lead-amount" value="${isEdit && leadData.estimated_amount ? leadData.estimated_amount : ''}" min="0" class="w-full pl-7 pr-3 py-2 border rounded-lg text-sm" placeholder="0">
+          </div>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">想定粗利率</label>
+          <div class="relative">
+            <input type="number" id="lead-profit-rate" value="${isEdit && leadData.estimated_profit_rate != null ? leadData.estimated_profit_rate : ''}" min="0" max="100" step="0.1" class="w-full pr-8 px-3 py-2 border rounded-lg text-sm" placeholder="20">
+            <span class="absolute right-3 top-2 text-gray-500 text-sm">%</span>
+          </div>
+        </div>
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">ステージ</label>
+          <select id="lead-stage" class="w-full px-3 py-2 border rounded-lg text-sm">
+            ${Object.entries(LEAD_STAGES).filter(([k]) => k !== 'won' && k !== 'lost').map(([k,v]) => `<option value="${k}" ${isEdit && leadData.stage===k ? 'selected' : (!isEdit && k==='inquiry' ? 'selected' : '')}>${v.label}</option>`).join('')}
+          </select>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">受注確度</label>
+          <div class="relative">
+            <input type="number" id="lead-probability" value="${isEdit && leadData.probability != null ? leadData.probability : ''}" min="0" max="100" class="w-full pr-8 px-3 py-2 border rounded-lg text-sm" placeholder="50">
+            <span class="absolute right-3 top-2 text-gray-500 text-sm">%</span>
+          </div>
+        </div>
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">発生元</label>
+          <input type="text" id="lead-source" value="${isEdit ? (leadData.source || '') : ''}" class="w-full px-3 py-2 border rounded-lg text-sm" placeholder="紹介/HP/既存顧客等">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">受注見込み時期</label>
+          <input type="date" id="lead-expected" value="${isEdit ? (leadData.expected_date || '') : ''}" class="w-full px-3 py-2 border rounded-lg text-sm">
+        </div>
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">元請け会社</label>
+        <select id="lead-prime" class="w-full px-3 py-2 border rounded-lg text-sm">
+          <option value="">なし</option>
+          ${partners.map(p => `<option value="${p.id}" ${isEdit && leadData.prime_contractor_id===p.id ? 'selected' : ''}>${p.company_name}${p.trade_type ? ' (' + p.trade_type + ')' : ''}</option>`).join('')}
+        </select>
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">担当者</label>
+        <select id="lead-owner" class="w-full px-3 py-2 border rounded-lg text-sm">
+          ${owners.map(u => `<option value="${u.id}" ${isEdit ? (leadData.owner_id===u.id ? 'selected' : '') : (u.id===state.user?.id ? 'selected' : '')}>${u.display_name}</option>`).join('')}
+        </select>
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">メモ</label>
+        <textarea id="lead-notes" rows="3" class="w-full px-3 py-2 border rounded-lg text-sm" placeholder="自由記述">${isEdit ? (leadData.notes || '') : ''}</textarea>
+      </div>
+    </div>`,
+    `<button onclick="closeModal()" class="px-4 py-2 text-sm border rounded-lg">キャンセル</button>
+     <button id="lead-save-btn" class="px-4 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">${isEdit ? '更新する' : '登録する'}</button>`
+  );
+
+  document.getElementById('lead-save-btn').onclick = async () => {
+    const name = document.getElementById('lead-name').value.trim();
+    if (!name) { showToast('案件名は必須です', 'error'); return; }
+
+    const body = {
+      lead_name: name,
+      client_name: document.getElementById('lead-client').value,
+      contact_info: document.getElementById('lead-contact').value,
+      estimated_amount: document.getElementById('lead-amount').value ? parseFloat(document.getElementById('lead-amount').value) : null,
+      estimated_profit_rate: document.getElementById('lead-profit-rate').value !== '' ? parseFloat(document.getElementById('lead-profit-rate').value) : null,
+      stage: document.getElementById('lead-stage').value,
+      probability: document.getElementById('lead-probability').value !== '' ? parseInt(document.getElementById('lead-probability').value) : null,
+      source: document.getElementById('lead-source').value,
+      expected_date: document.getElementById('lead-expected').value || null,
+      prime_contractor_id: document.getElementById('lead-prime').value || null,
+      owner_id: document.getElementById('lead-owner').value,
+      notes: document.getElementById('lead-notes').value
+    };
+
+    try {
+      if (isEdit) {
+        await api(`/leads/${leadData.id}/update`, { method: 'POST', body: JSON.stringify(body) });
+        showToast('リードを更新しました');
+      } else {
+        const res = await api('/leads/create', { method: 'POST', body: JSON.stringify(body) });
+        showToast('リードを登録しました');
+      }
+      closeModal();
+      renderPageContent();
+    } catch (err) { showToast(err.message, 'error'); }
+  };
+}
+
+// ---- LEAD DETAIL ----
+async function renderLeadDetail(main) {
+  const id = state.pageParams?.id;
+  if (!id) { navigate('leads'); return; }
+
+  const data = await api(`/leads/${id}`);
+  const lead = data.lead;
+  const activities = data.activities || [];
+  const linked = data.linkedRequest;
+
+  main.innerHTML = `
+    <div class="flex items-center gap-3 mb-4">
+      <button onclick="navigate('leads')" class="text-gray-500 hover:text-gray-700"><i class="fas fa-arrow-left"></i></button>
+      <h1 class="text-xl font-bold text-gray-900">${lead.lead_name}</h1>
+      ${leadStageBadge(lead.stage)}
+    </div>
+
+    <!-- Lead Info -->
+    <div class="bg-white border rounded-lg p-5 mb-4">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="text-sm font-semibold text-gray-500 uppercase tracking-wider">リード情報</h2>
+        <div class="flex gap-2">
+          <button onclick="editLeadFromDetail('${id}')" class="text-sm text-indigo-600 hover:text-indigo-800"><i class="fas fa-edit mr-1"></i>編集</button>
+          <button onclick="deleteLeadConfirm('${id}')" class="text-sm text-red-500 hover:text-red-700"><i class="fas fa-trash mr-1"></i>削除</button>
+        </div>
+      </div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-y-3 gap-x-6 text-sm">
+        <div><span class="text-gray-500">取引先・施主</span><p class="font-medium">${lead.client_name || '-'}</p></div>
+        <div><span class="text-gray-500">連絡先</span><p class="font-medium">${lead.contact_info || '-'}</p></div>
+        <div><span class="text-gray-500">概算金額（税抜）</span><p class="font-medium text-lg">${lead.estimated_amount ? formatCurrency(lead.estimated_amount) : '-'}</p></div>
+        <div><span class="text-gray-500">想定粗利率</span><p class="font-medium">${lead.estimated_profit_rate != null ? lead.estimated_profit_rate + '%' : '-'}</p></div>
+        ${lead.estimated_amount && lead.estimated_profit_rate != null ? `
+        <div><span class="text-gray-500">想定粗利額</span><p class="font-medium text-emerald-700">${formatCurrency(Math.round(lead.estimated_amount * lead.estimated_profit_rate / 100))}</p></div>
+        ` : ''}
+        <div><span class="text-gray-500">受注確度</span><p class="font-medium">${lead.probability != null ? lead.probability + '%' : '-'}</p></div>
+        <div><span class="text-gray-500">発生元</span><p class="font-medium">${lead.source || '-'}</p></div>
+        <div><span class="text-gray-500">受注見込み時期</span><p class="font-medium">${lead.expected_date || '-'}</p></div>
+        ${lead.prime_contractor_name ? `<div><span class="text-gray-500">元請け会社</span><p class="font-medium"><i class="fas fa-building text-indigo-400 mr-1"></i>${lead.prime_contractor_name}</p></div>` : ''}
+        <div><span class="text-gray-500">担当者</span><p class="font-medium">${lead.owner_name}</p></div>
+        <div><span class="text-gray-500">作成者</span><p class="font-medium">${lead.created_by_name}</p></div>
+        <div><span class="text-gray-500">作成日</span><p class="font-medium">${formatDate(lead.created_at)}</p></div>
+        ${lead.notes ? `<div class="sm:col-span-2"><span class="text-gray-500">メモ</span><p class="font-medium whitespace-pre-wrap">${lead.notes}</p></div>` : ''}
+      </div>
+    </div>
+
+    <!-- Linked Request -->
+    ${linked ? `
+    <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+      <h3 class="text-sm font-semibold text-blue-800 mb-2"><i class="fas fa-link mr-1"></i>紐づき申請</h3>
+      <div class="flex items-center gap-3">
+        <span class="text-sm">#${String(linked.request_number).padStart(4,'0')} ${linked.title}</span>
+        ${statusBadge(linked.status)}
+        <span class="text-sm text-gray-500">${formatCurrency(linked.amount_with_tax)}</span>
+        <button onclick="navigate('request-detail',{id:'${linked.id}'})" class="text-xs text-blue-600 hover:text-blue-800 ml-auto">詳細を見る →</button>
+      </div>
+    </div>
+    ` : `
+    <div class="bg-gray-50 border border-gray-200 rounded-lg p-4 mb-4">
+      <div class="flex items-center justify-between">
+        <p class="text-sm text-gray-500"><i class="fas fa-unlink mr-1"></i>見積申請と紐づけなし</p>
+        <button onclick="createRequestFromLead('${id}','${(lead.lead_name || '').replace(/'/g, "\\'")}','${(lead.client_name || '').replace(/'/g, "\\'")}')" class="text-sm text-indigo-600 hover:text-indigo-800 font-medium">
+          <i class="fas fa-file-alt mr-1"></i>見積申請を作成
+        </button>
+      </div>
+    </div>
+    `}
+
+    <!-- Stage Change -->
+    <div class="bg-white border rounded-lg p-4 mb-4">
+      <h3 class="text-sm font-semibold text-gray-500 mb-2">ステージ変更</h3>
+      <div class="flex flex-wrap gap-2">
+        ${Object.entries(LEAD_STAGES).map(([k, v]) => `
+          <button onclick="changeLeadStageFromDetail('${id}','${k}')" class="px-3 py-1.5 text-xs rounded-lg border ${lead.stage === k ? 'ring-2 ring-indigo-500 font-bold ' + v.bg : 'bg-white text-gray-600 hover:bg-gray-50'}">${v.label}</button>
+        `).join('')}
+      </div>
+    </div>
+
+    <!-- Activity Timeline -->
+    <div class="bg-white border rounded-lg p-5 mb-4">
+      <h2 class="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">活動ログ</h2>
+      
+      <!-- Add Note -->
+      <div class="flex gap-2 mb-4">
+        <input type="text" id="lead-note-input" class="flex-1 px-3 py-2 border rounded-lg text-sm" placeholder="メモを追加...">
+        <button onclick="addLeadNote('${id}')" class="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700">
+          <i class="fas fa-plus mr-1"></i>追加
+        </button>
+      </div>
+      
+      ${activities.length === 0 ? `
+        <p class="text-center text-gray-400 py-4 text-sm">活動ログはまだありません</p>
+      ` : `
+        <div class="space-y-3">
+          ${activities.map(a => `
+            <div class="flex gap-3 ${a.activity_type === 'note' ? '' : 'opacity-80'}">
+              <div class="flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${a.activity_type === 'note' ? 'bg-indigo-100 text-indigo-600' : a.activity_type === 'stage_change' ? 'bg-amber-100 text-amber-600' : 'bg-blue-100 text-blue-600'}">
+                <i class="fas ${a.activity_type === 'note' ? 'fa-sticky-note' : a.activity_type === 'stage_change' ? 'fa-exchange-alt' : 'fa-link'} text-xs"></i>
+              </div>
+              <div class="flex-1 min-w-0">
+                <p class="text-sm text-gray-800">${a.content}</p>
+                <p class="text-xs text-gray-400 mt-0.5">${a.user_name} ・ ${formatDate(a.created_at)}</p>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      `}
+    </div>`;
+
+  // Enter key for note input
+  document.getElementById('lead-note-input')?.addEventListener('keyup', (e) => {
+    if (e.key === 'Enter') addLeadNote(id);
+  });
+}
+
+async function editLeadFromDetail(leadId) {
+  const data = await api(`/leads/${leadId}`);
+  showLeadFormModal(data.lead);
+}
+
+function deleteLeadConfirm(leadId) {
+  showConfirm('このリードを削除しますか？活動ログも全て削除されます。', async () => {
+    try {
+      await api(`/leads/${leadId}/delete`, { method: 'POST' });
+      showToast('リードを削除しました');
+      navigate('leads');
+    } catch (err) { showToast(err.message, 'error'); }
+  });
+}
+
+async function changeLeadStageFromDetail(leadId, newStage) {
+  try {
+    await api(`/leads/${leadId}/stage`, { method: 'POST', body: JSON.stringify({ stage: newStage }) });
+    showToast('ステージを更新しました');
+    renderPageContent();
+  } catch (err) { showToast(err.message, 'error'); }
+}
+
+async function addLeadNote(leadId) {
+  const input = document.getElementById('lead-note-input');
+  const content = input?.value?.trim();
+  if (!content) { showToast('メモ内容を入力してください', 'error'); return; }
+  try {
+    await api(`/leads/${leadId}/note`, { method: 'POST', body: JSON.stringify({ content }) });
+    showToast('メモを追加しました');
+    renderPageContent();
+  } catch (err) { showToast(err.message, 'error'); }
+}
+
+function createRequestFromLead(leadId, leadName, clientName) {
+  // Navigate to new request with pre-filled data from lead
+  navigate('new-request', { from_lead: leadId, title: leadName, client: clientName });
+}
+
+// ---- LEAD DASHBOARD (売上予測) ----
+async function renderLeadDashboard(main) {
+  const data = await api('/leads/dashboard/summary');
+  const { confirmed, leads: leadSummary, total, details, pipeline } = data;
+
+  main.innerHTML = `
+    <h1 class="text-xl font-bold text-gray-900 mb-4"><i class="fas fa-chart-pie text-indigo-500 mr-2"></i>売上予測ダッシュボード</h1>
+
+    <!-- Summary Cards -->
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+      <div class="bg-white border rounded-lg p-4">
+        <p class="text-xs text-gray-500 mb-1">確定売上</p>
+        <p class="text-xl font-bold text-green-700">${formatCurrency(confirmed.revenue)}</p>
+        <p class="text-xs text-gray-400">${confirmed.count}件</p>
+      </div>
+      <div class="bg-white border rounded-lg p-4">
+        <p class="text-xs text-gray-500 mb-1">リード見込み</p>
+        <p class="text-xl font-bold text-indigo-600">${formatCurrency(leadSummary.revenue)}</p>
+        <p class="text-xs text-gray-400">${leadSummary.count}件</p>
+      </div>
+      <div class="bg-gradient-to-r from-indigo-50 to-green-50 border border-indigo-200 rounded-lg p-4">
+        <p class="text-xs text-indigo-700 font-medium mb-1">合算予測売上</p>
+        <p class="text-2xl font-bold text-gray-900">${formatCurrency(total.revenue)}</p>
+      </div>
+      <div class="bg-gradient-to-r from-emerald-50 to-green-50 border border-emerald-200 rounded-lg p-4">
+        <p class="text-xs text-emerald-700 font-medium mb-1">予測粗利</p>
+        <p class="text-xl font-bold text-emerald-700">${formatCurrency(total.profit)}</p>
+        <p class="text-xs text-emerald-600">${total.profit_rate}%</p>
+      </div>
+    </div>
+
+    <!-- Pipeline Chart -->
+    <div class="bg-white border rounded-lg p-5 mb-6">
+      <h2 class="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-4">ステージ別パイプライン</h2>
+      ${pipeline.length === 0 ? `<p class="text-center text-gray-400 py-4 text-sm">進行中のリードはありません</p>` : `
+        <div class="space-y-3">
+          ${pipeline.map(p => {
+            const maxAmount = Math.max(...pipeline.map(pp => pp.total_amount || 1));
+            const pct = maxAmount > 0 ? Math.round((p.total_amount / maxAmount) * 100) : 0;
+            const stageInfo = LEAD_STAGES[p.stage] || { label: p.stage, color: 'gray' };
+            return `
+              <div class="flex items-center gap-3">
+                <div class="w-28 text-xs font-medium text-gray-700">${stageInfo.label}</div>
+                <div class="flex-1 bg-gray-100 rounded-full h-6 relative overflow-hidden">
+                  <div class="h-full rounded-full bg-indigo-${p.stage === 'inquiry' ? '200' : p.stage === 'survey' ? '300' : p.stage === 'estimating' ? '400' : p.stage === 'submitted' ? '500' : '600'}" style="width:${pct}%"></div>
+                  <span class="absolute inset-0 flex items-center justify-center text-xs font-medium ${pct > 40 ? 'text-white' : 'text-gray-700'}">${p.count}件 / ${formatCurrency(p.total_amount)}</span>
+                </div>
+              </div>`;
+          }).join('')}
+        </div>
+      `}
+    </div>
+
+    <!-- Detail Table -->
+    <div class="bg-white border rounded-lg overflow-hidden">
+      <h2 class="text-sm font-semibold text-gray-500 uppercase tracking-wider p-4 border-b">内訳一覧</h2>
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead class="bg-gray-50 border-b">
+            <tr>
+              <th class="px-3 py-2 text-left text-xs font-medium text-gray-500">区分</th>
+              <th class="px-3 py-2 text-left text-xs font-medium text-gray-500">案件名</th>
+              <th class="px-3 py-2 text-left text-xs font-medium text-gray-500">取引先</th>
+              <th class="px-3 py-2 text-right text-xs font-medium text-gray-500">金額（税抜）</th>
+              <th class="px-3 py-2 text-right text-xs font-medium text-gray-500">粗利率</th>
+              <th class="px-3 py-2 text-right text-xs font-medium text-gray-500">粗利額</th>
+              <th class="px-3 py-2 text-left text-xs font-medium text-gray-500">ステータス</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-gray-100">
+            ${details.length === 0 ? `<tr><td colspan="7" class="px-3 py-8 text-center text-gray-400">データがありません</td></tr>` : ''}
+            ${details.map(d => `
+              <tr class="hover:bg-gray-50">
+                <td class="px-3 py-2">${d.type === 'confirmed' ? '<span class="text-xs font-medium px-2 py-0.5 rounded-full bg-green-100 text-green-800">確定</span>' : '<span class="text-xs font-medium px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-800">リード</span>'}</td>
+                <td class="px-3 py-2 font-medium ${d.type === 'confirmed' ? 'text-gray-900' : 'text-indigo-700 cursor-pointer'}" ${d.type === 'lead' ? `onclick="navigate('lead-detail',{id:'${d.id}'})"` : ''}>${d.name}</td>
+                <td class="px-3 py-2 text-gray-600">${d.client || '-'}</td>
+                <td class="px-3 py-2 text-right text-gray-900">${d.amount ? formatCurrency(d.amount) : '-'}</td>
+                <td class="px-3 py-2 text-right text-gray-600">${d.profit_rate ? d.profit_rate + '%' : '-'}</td>
+                <td class="px-3 py-2 text-right font-medium text-emerald-700">${d.profit_amount ? formatCurrency(d.profit_amount) : '-'}</td>
+                <td class="px-3 py-2">${d.type === 'confirmed' ? statusBadge(d.status) : leadStageBadge(d.stage)}</td>
+              </tr>
+            `).join('')}
+            ${details.length > 0 ? `
+            <tr class="bg-gray-50 font-bold border-t-2">
+              <td colspan="3" class="px-3 py-2 text-right text-gray-700">合計</td>
+              <td class="px-3 py-2 text-right text-gray-900">${formatCurrency(total.revenue)}</td>
+              <td class="px-3 py-2 text-right text-gray-600">${total.profit_rate}%</td>
+              <td class="px-3 py-2 text-right text-emerald-700">${formatCurrency(total.profit)}</td>
+              <td></td>
+            </tr>` : ''}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
 }
 
 // ============================================================
