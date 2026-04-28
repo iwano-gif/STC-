@@ -293,8 +293,11 @@ leadRoutes.get('/dashboard/summary', async (c) => {
 
   // 確定案件（deal_tracking: contracted以上）
   const confirmedDeals = await c.env.DB.prepare(
-    `SELECT d.id, d.deal_status, r.title, r.client_name, r.amount as amount_excl_tax, r.amount_with_tax,
-            r.gross_profit_rate, r.tax_rate,
+    `SELECT d.id, d.deal_status,
+            r.title, r.client_name, r.gross_profit_rate,
+            COALESCE(d.contract_amount_excl_tax, r.amount) as revenue,
+            COALESCE(d.contract_amount, r.amount_with_tax) as amount_with_tax,
+            COALESCE(d.cost_amount, 0) as cost_amount,
             COALESCE(SUM(dp.contract_amount), 0) as subcontractor_cost
      FROM deal_tracking d
      JOIN requests r ON d.request_id = r.id
@@ -304,12 +307,22 @@ leadRoutes.get('/dashboard/summary', async (c) => {
   ).bind().all()
 
   // 確定案件の集計
+  // 粗利 = 契約金額(税抜) - 原価(cost_amount)。原価未入力なら gross_profit_rate で推定
   let confirmedRevenue = 0
   let confirmedProfit = 0
   const confirmedList = (confirmedDeals.results || []).map((d: any) => {
-    const revenue = d.amount_excl_tax || 0
-    const profitRate = d.gross_profit_rate || 0
-    const profit = revenue * (profitRate / 100)
+    const revenue = d.revenue || 0
+    let profit: number
+    let profitRate: number
+    if (d.cost_amount > 0) {
+      // 原価入力済み → 実績粗利
+      profit = revenue - d.cost_amount
+      profitRate = revenue > 0 ? Math.round((profit / revenue) * 1000) / 10 : 0
+    } else {
+      // 原価未入力 → 粗利率から推定
+      profitRate = d.gross_profit_rate || 0
+      profit = revenue * (profitRate / 100)
+    }
     confirmedRevenue += revenue
     confirmedProfit += profit
     return {
